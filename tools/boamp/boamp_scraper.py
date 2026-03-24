@@ -83,11 +83,18 @@ def is_seen(registry: dict[str, Any], idweb: str) -> bool:
     return idweb in registry.get("seen", {})
 
 
-def mark_seen(registry: dict[str, Any], idweb: str, title: str, offer_type: str = "") -> None:
+def mark_seen(
+    registry: dict[str, Any],
+    idweb: str,
+    title: str,
+    offer_type: str = "",
+    datelimitereponse: str = "",
+) -> None:
     """Mark a notice as processed."""
     registry.setdefault("seen", {})[idweb] = {
         "title": title,
         "offer_type": offer_type,
+        "datelimitereponse": datelimitereponse,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1153,16 +1160,24 @@ def run() -> None:
     place = PlaceClient()
     place.authenticate()  # Will log warning if credentials missing
 
-    # Initialize Google Drive client (optional)
     # Initialize GitHub publisher
     try:
-        from git_publisher import init_repo, publish_offer
+        from git_publisher import archive_expired_offers, init_repo, publish_offer
         init_repo()
         github_enabled = True
         log.info("GitHub connecté — publication activée")
     except Exception as exc:
         github_enabled = False
         log.info("GitHub non disponible — publication désactivée (%s)", exc)
+
+    # Archive expired offers before processing new ones
+    if github_enabled:
+        try:
+            n = archive_expired_offers(registry)
+            if n:
+                save_registry(registry)
+        except Exception as exc:
+            log.warning("Erreur archivage: %s", exc)
 
     log.info("=== BOAMP Scraper — Services Web (TMA, Dev, Formation, IA) ===")
     try:
@@ -1185,16 +1200,20 @@ def run() -> None:
             continue
 
         try:
+            offer_type = classify_offer(notice)
             offer_dir = process_notice(notice, place_client=place)
 
             # Publish to GitHub
             if github_enabled:
                 try:
-                    publish_offer(offer_dir)
+                    publish_offer(offer_dir, offer_type)
                 except Exception as exc:
                     log.warning("Échec publication GitHub pour %s: %s", idweb, exc)
 
-            mark_seen(registry, idweb, notice.get("objet", ""), classify_offer(notice))
+            mark_seen(
+                registry, idweb, notice.get("objet", ""),
+                offer_type, notice.get("datelimitereponse", ""),
+            )
             save_registry(registry)
             processed += 1
         except Exception:
