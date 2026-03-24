@@ -1,6 +1,14 @@
-"""Configuration for BOAMP TMA/Education scraper."""
+"""Configuration for BOAMP Web Services scraper (TMA, Dev, Formation, IA)."""
 
 from pathlib import Path
+
+
+class OfferType:
+    TMA = "TMA"
+    DEVELOPPEMENT = "DEVELOPPEMENT"
+    FORMATION = "FORMATION"
+    IA = "IA"
+
 
 # --- API ---
 BASE_URL = "https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets"
@@ -10,27 +18,70 @@ DATASET_HTML = "boamp-html"
 # --- Search ---
 MAX_RESULTS = 10
 
-# Search terms for TMA
+# TMA Web / applicative maintenance (termes spécifiques logiciel)
 TMA_TERMS = [
-    "TMA",
     "tierce maintenance applicative",
     "maintenance applicative",
+    "TMA applicative",
+    "TMA web",
+    "MCO applicatif",
+    "MCO logiciel",
+    "maintenance logicielle",
 ]
 
-# Search terms for education sector
-EDUCATION_TERMS = [
-    "université",
-    "education",
-    "enseignement",
-    "éducation",
-    "académie",
-    "rectorat",
-    "scolaire",
-    "CROUS",
-    "CNOUS",
+# Web application development
+DEV_TERMS = [
+    "développement application web",
+    "création application web",
+    "création site web",
+    "développement site internet",
+    "conception application web",
+    "réalisation application web",
+    "développement logiciel web",
+    "refonte site web",
+    "refonte application web",
+    "développement fullstack",
+    "développement frontend",
+    "développement backend",
+    "application mobile",
+    "portail web",
+    "intranet",
+    "extranet",
 ]
 
-# Only active calls for tenders (not results or cancellations)
+# Web training / e-learning platforms
+FORMATION_TERMS = [
+    "formation développement web",
+    "formation informatique web",
+    "e-learning",
+    "plateforme e-learning",
+    "plateforme formation en ligne",
+    "learning management system",
+    "digital learning",
+    "création plateforme formation",
+    "formation numérique informatique",
+    "MOOC",
+]
+
+# AI / ML solutions
+IA_TERMS = [
+    "intelligence artificielle",
+    "développement IA",
+    "chatbot IA",
+    "machine learning",
+    "data science",
+    "intégration intelligence artificielle",
+    "deep learning",
+    "traitement automatique du langage naturel",
+    "analyse prédictive données",
+    "automatisation intelligence artificielle",
+    "solution IA",
+]
+
+# Combined for WHERE clause
+ALL_SEARCH_TERMS = TMA_TERMS + DEV_TERMS + FORMATION_TERMS + IA_TERMS
+
+# Only active calls for tenders
 NOTICE_TYPES = ["Avis de marché/", "Avis de marché"]
 
 # --- Paths ---

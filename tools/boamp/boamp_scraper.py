@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""BOAMP Scraper — TMA / Éducation.
+"""BOAMP Scraper — Services Web (TMA, Dev, Formation, IA).
 
-Récupère les dernières offres de marchés publics liées à la TMA
-(Tierce Maintenance Applicative) dans le secteur de l'éducation
+Récupère les dernières offres de marchés publics liées aux services web
+(TMA, développement, formation, intelligence artificielle)
 via l'API OpenDataSoft du BOAMP.
 
 Pour chaque offre :
   - Crée un dossier dédié avec un fichier Markdown décrivant l'offre
   - Télécharge la synthèse HTML et le contenu complet
   - Génère les templates de réponse nécessaires
+  - Classifie l'offre par type (TMA, Dev, Formation, IA)
 
 Déduplication via un registre JSON local.
 """
@@ -26,19 +27,28 @@ from typing import Any, Optional
 import requests
 
 from config import (
+    ALL_SEARCH_TERMS,
     BASE_URL,
     BOAMP_NOTICE_URL,
     DATA_DIR,
     DATASET_BOAMP,
     DATASET_HTML,
-    EDUCATION_TERMS,
+    DEV_TERMS,
+    FORMATION_TERMS,
+    IA_TERMS,
     MAX_RESULTS,
     NOTICE_TYPES,
     OFFRES_DIR,
+    OfferType,
     REGISTRY_FILE,
     TMA_TERMS,
 )
+from ae_generator import generate_ae
+from dc1_generator import generate_dc1
+from dc2_generator import generate_dc2
+from dpgf_generator import generate_dpgf
 from entreprise import ENTREPRISE as E
+from memoire_generator import generate_memoire
 from place_client import PlaceClient, fetch_dce_for_notice
 
 logging.basicConfig(
@@ -73,10 +83,11 @@ def is_seen(registry: dict[str, Any], idweb: str) -> bool:
     return idweb in registry.get("seen", {})
 
 
-def mark_seen(registry: dict[str, Any], idweb: str, title: str) -> None:
+def mark_seen(registry: dict[str, Any], idweb: str, title: str, offer_type: str = "") -> None:
     """Mark a notice as processed."""
     registry.setdefault("seen", {})[idweb] = {
         "title": title,
+        "offer_type": offer_type,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -87,26 +98,42 @@ def mark_seen(registry: dict[str, Any], idweb: str, title: str) -> None:
 
 
 def _build_where_clause() -> str:
-    """Build the ODSQL WHERE clause for TMA + education.
+    """Build the ODSQL WHERE clause for web services.
 
     Filters to only include notices with a future response deadline.
     """
-    tma_parts = " OR ".join(f'search(objet,"{t}")' for t in TMA_TERMS)
-    edu_obj = " OR ".join(f'search(objet,"{t}")' for t in EDUCATION_TERMS)
-    edu_buyer = " OR ".join(f'search(nomacheteur,"{t}")' for t in EDUCATION_TERMS)
-
+    all_parts = " OR ".join(f'search(objet,"{t}")' for t in ALL_SEARCH_TERMS)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    where = (
-        f"({tma_parts})"
-        f" AND ({edu_obj} OR {edu_buyer})"
-        f' AND datelimitereponse >= "{today}"'
-    )
+    where = f"({all_parts})" f' AND datelimitereponse >= "{today}"'
     return where
 
 
+def classify_offer(notice: dict[str, Any]) -> str:
+    """Classify a notice into an offer type based on keywords.
+    Priority: IA > FORMATION > DEVELOPPEMENT > TMA (default).
+    """
+    objet = (notice.get("objet") or "").lower()
+    descripteurs = notice.get("descripteur_libelle", "")
+    if isinstance(descripteurs, list):
+        descripteurs = " ".join(descripteurs).lower()
+    else:
+        descripteurs = (descripteurs or "").lower()
+    text = f"{objet} {descripteurs}"
+
+    for term in IA_TERMS:
+        if term.lower() in text:
+            return OfferType.IA
+    for term in FORMATION_TERMS:
+        if term.lower() in text:
+            return OfferType.FORMATION
+    for term in DEV_TERMS:
+        if term.lower() in text:
+            return OfferType.DEVELOPPEMENT
+    return OfferType.TMA
+
+
 def search_notices(limit: int = MAX_RESULTS) -> list[dict[str, Any]]:
-    """Search BOAMP for TMA/education notices, newest first."""
+    """Search BOAMP for web services notices, newest first."""
     url = f"{BASE_URL}/{DATASET_BOAMP}/records"
     params = {
         "where": _build_where_clause(),
@@ -575,8 +602,8 @@ def create_response_template_memoire(notice: dict[str, Any]) -> str:
 | **Dirigeant** | {E['representant_prenom']} {E['representant_nom']}, {E['representant_qualite']} |
 
 ### 1.2 Positionnement et expertise
-> [Décrire l'expertise de {E['raison_sociale']} en maintenance applicative,
-> en particulier dans le secteur de l'éducation / public]
+> [Décrire l'expertise de {E['raison_sociale']} en prestations de services web :
+> TMA, développement, formation, intelligence artificielle]
 
 ### 1.3 Certifications et labels
 - [ ] ISO 9001 — Management de la qualité
@@ -589,7 +616,7 @@ def create_response_template_memoire(notice: dict[str, Any]) -> str:
 
 ### 2.1 Contexte
 > [Reformuler le contexte de l'acheteur : enjeux, périmètre applicatif,
-> contraintes spécifiques au secteur éducation]
+> contraintes spécifiques au secteur concerné]
 
 ### 2.2 Périmètre applicatif
 | Application | Technologies | Criticité | Utilisateurs |
@@ -598,9 +625,9 @@ def create_response_template_memoire(notice: dict[str, Any]) -> str:
 | [APP 2] | [TECH] | [HAUTE/MOYENNE/BASSE] | [NOMBRE] |
 
 ### 2.3 Enjeux identifiés
-1. [Enjeu 1 — ex: continuité de service pendant les périodes scolaires]
-2. [Enjeu 2 — ex: conformité RGPD / données élèves]
-3. [Enjeu 3 — ex: interopérabilité avec les SI de l'Éducation nationale]
+1. [Enjeu 1 — ex: continuité de service, haute disponibilité]
+2. [Enjeu 2 — ex: conformité RGPD / sécurité des données]
+3. [Enjeu 3 — ex: interopérabilité avec les SI existants]
 
 ---
 
@@ -728,9 +755,9 @@ Demande → Qualification → Analyse → Chiffrage → Validation
 
 | Client | Secteur | Objet | Durée | Montant |
 |--------|---------|-------|-------|---------|
-| [CLIENT 1] | Éducation | [DESCRIPTION] | [DURÉE] | [MONTANT] € |
-| [CLIENT 2] | Éducation | [DESCRIPTION] | [DURÉE] | [MONTANT] € |
-| [CLIENT 3] | Public | [DESCRIPTION] | [DURÉE] | [MONTANT] € |
+| [CLIENT 1] | [SECTEUR] | [DESCRIPTION] | [DURÉE] | [MONTANT] € |
+| [CLIENT 2] | [SECTEUR] | [DESCRIPTION] | [DURÉE] | [MONTANT] € |
+| [CLIENT 3] | [SECTEUR] | [DESCRIPTION] | [DURÉE] | [MONTANT] € |
 
 > [Joindre les attestations de bonne exécution si disponibles]
 
@@ -955,16 +982,6 @@ def create_response_template_planning(notice: dict[str, Any]) -> str:
 | Comité pilotage T1 | [DATE] | Rapport d'activité |
 | Revue annuelle | [DATE] | Bilan + plan amélioration |
 
-## 4. Calendrier spécifique éducation
-
-> **Attention** : adapter le planning aux contraintes du calendrier scolaire
-
-| Période | Contrainte | Action |
-|---------|-----------|--------|
-| Juillet-Août | Vacances scolaires, fenêtre MEP | MEP majeures planifiées |
-| Septembre | Rentrée scolaire, charge forte | Gel des MEP, support renforcé |
-| Décembre-Janvier | Examens / inscriptions | Vigilance accrue, astreinte |
-| Mars-Juin | Période Parcoursup / examens | Gel MEP si périmètre concerné |
 """
 
 
@@ -974,14 +991,14 @@ def create_response_template_references(notice: dict[str, Any]) -> str:
 
 ---
 
-> Présentez 3 à 5 références de marchés similaires (TMA, secteur éducation/public).
+> Présentez 3 à 5 références de marchés similaires (TMA, développement, formation, IA).
 
 ## Référence 1
 
 | Champ | Détail |
 |-------|--------|
 | **Client** | [NOM DE L'ORGANISME] |
-| **Secteur** | [Éducation / Enseignement supérieur / Public] |
+| **Secteur** | [SECTEUR] |
 | **Objet du marché** | [DESCRIPTION DE LA PRESTATION] |
 | **Période** | [DATE DÉBUT] — [DATE FIN ou en cours] |
 | **Montant** | [MONTANT] € HT |
@@ -1059,6 +1076,8 @@ def process_notice(
     offer_dir = OFFRES_DIR / dirname
 
     offer_dir.mkdir(parents=True, exist_ok=True)
+    offer_type = classify_offer(notice)
+    log.info("  Type d'offre: %s", offer_type)
     (offer_dir / "documents").mkdir(exist_ok=True)
     (offer_dir / "reponse").mkdir(exist_ok=True)
 
@@ -1091,13 +1110,22 @@ def process_notice(
     docs_readme = create_documents_readme(notice, parsed)
     (docs_dir / "README.md").write_text(docs_readme, encoding="utf-8")
 
-    # 5. Response templates
+    # 5. Generate Word/Excel documents (official formats)
+    docx_generators = {
+        "01_DC1_Fenrir_IT.docx": lambda n, p: generate_dc1(n, p),
+        "02_DC2_Fenrir_IT.docx": lambda n, p: generate_dc2(n, p),
+        "03_Memoire_Technique_Fenrir_IT.docx": lambda n, p: generate_memoire(n, p, offer_type),
+        "04_Acte_Engagement_Fenrir_IT.docx": lambda n, p: generate_ae(n, p),
+        "05_DPGF_Fenrir_IT.xlsx": lambda n, p: generate_dpgf(n, p, offer_type),
+    }
+    for filename, generator in docx_generators.items():
+        try:
+            generator(notice, offer_dir / "reponse" / filename)
+        except Exception as exc:
+            log.warning("Erreur génération %s pour %s: %s", filename, idweb, exc)
+
+    # 6. Response templates (markdown — planning & références)
     templates = {
-        "01_lettre_candidature_DC1.md": create_response_template_dc1,
-        "02_declaration_candidat_DC2.md": create_response_template_dc2,
-        "03_memoire_technique.md": create_response_template_memoire,
-        "04_acte_engagement.md": create_response_template_acte_engagement,
-        "05_bordereau_prix.md": create_response_template_bordereau,
         "06_planning_execution.md": create_response_template_planning,
         "07_references_clients.md": create_response_template_references,
     }
@@ -1125,7 +1153,18 @@ def run() -> None:
     place = PlaceClient()
     place.authenticate()  # Will log warning if credentials missing
 
-    log.info("=== BOAMP Scraper — TMA / Éducation ===")
+    # Initialize Google Drive client (optional)
+    # Initialize GitHub publisher
+    try:
+        from git_publisher import init_repo, publish_offer
+        init_repo()
+        github_enabled = True
+        log.info("GitHub connecté — publication activée")
+    except Exception as exc:
+        github_enabled = False
+        log.info("GitHub non disponible — publication désactivée (%s)", exc)
+
+    log.info("=== BOAMP Scraper — Services Web (TMA, Dev, Formation, IA) ===")
     try:
         notices = search_notices(limit=MAX_RESULTS + 10)  # fetch extra to handle dedup
     except requests.RequestException as exc:
@@ -1146,8 +1185,16 @@ def run() -> None:
             continue
 
         try:
-            process_notice(notice, place_client=place)
-            mark_seen(registry, idweb, notice.get("objet", ""))
+            offer_dir = process_notice(notice, place_client=place)
+
+            # Publish to GitHub
+            if github_enabled:
+                try:
+                    publish_offer(offer_dir)
+                except Exception as exc:
+                    log.warning("Échec publication GitHub pour %s: %s", idweb, exc)
+
+            mark_seen(registry, idweb, notice.get("objet", ""), classify_offer(notice))
             save_registry(registry)
             processed += 1
         except Exception:
