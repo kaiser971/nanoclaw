@@ -1,13 +1,9 @@
 ---
 name: freelance-cv
-description: Analyse les offres freelance pertinentes, effectue le scoring sémantique Tier 2, et génère des CV adaptés. Déclenché automatiquement après le scraping quotidien ou manuellement quand l'utilisateur demande "lance le scraping", "nouvelles offres", "scrape les offres", etc. Utilise le skill resume-optimizer pour la génération de CV.
+description: Orchestre le pipeline freelance — scraping on-demand, scoring Tier 2, et délègue l'adaptation CV au skill resume-optimizer. Déclenché automatiquement après le scraping ou manuellement ("lance le scraping", "nouvelles offres", etc.).
 ---
 
-# Freelance CV — Analyse & Adaptation
-
-Tu gères le pipeline freelance. Tu es déclenché soit :
-- **Automatiquement** après le scraping quotidien (20h)
-- **Manuellement** quand l'utilisateur demande depuis le chat
+# Freelance CV — Orchestration pipeline
 
 ## Déclenchement manuel (on-demand)
 
@@ -24,181 +20,134 @@ EOF
 
 Puis réponds : "🔄 Scraping lancé. Les résultats arriveront dans quelques secondes."
 
-Le host exécutera le scraping, et si des offres pertinentes sont trouvées, un nouveau container sera déclenché avec les offres à analyser.
-
 ## Mode automatique (post-scraping)
 
-Quand tu es déclenché après le scraping, ta mission :
-1. Lire les offres pertinentes
-2. Les scorer sémantiquement (Tier 2)
-3. Générer un CV adapté pour les meilleures
-4. Envoyer un digest à l'utilisateur
+Quand tu es déclenché après le scraping, tu traites TOUTES les offres en attente.
 
-## Données disponibles
+## Données
 
 ```
-/workspace/ipc/input/autoapply_offers.json       — Offres à analyser (écrites par le host)
-/workspace/project/data/freelance/profile.json   — Profil professionnel complet (read-only)
-/workspace/project/data/freelance/CV.docx        — CV source (read-only)
+/workspace/project/data/freelance/profile.json   — Profil professionnel (read-only)
+/workspace/project/data/freelance/CV.docx        — CV source original (read-only)
+/workspace/extra/freelance-radar/                — Repo des offres (read-write)
+  {platform}/{slug}/
+    description.md   — Détails de l'offre (créé par le host)
+    context.md       — Contexte pour le traitement (status: pending/processed)
+    CV.docx          — CV adapté (créé par resume-optimizer)
 ```
 
-Le champ `jobDir` dans le fichier d'offres indique le chemin du repo de tracking.
-Chaque offre a déjà un dossier `{jobDir}/{platform}/{slug}/description.md` créé par le host.
-Tu y places le CV adapté : `{jobDir}/{platform}/{slug}/CV.docx`
-
-> Note : `/workspace/project/` est le projet NanoClaw monté en lecture seule (main group uniquement).
-
-## Étape 1 — Lire les offres
+## Étape 1 — Trouver toutes les offres en attente
 
 ```bash
-cat /workspace/ipc/input/autoapply_offers.json
+grep -rl "status: pending" /workspace/extra/freelance-radar/*/context.md 2>/dev/null
 ```
 
-Le fichier contient :
-```json
-{
-  "offers": [
-    {
-      "id": "boamp_26-29931",
-      "platform": "boamp",
-      "title": "TMA site institutionnel...",
-      "description": "...",
-      "buyer": "Département du Val de Marne",
-      "skills": ["Informatique"],
-      "url": "https://www.boamp.fr/...",
-      "deadline": "2026-05-11",
-      "tier1Score": 0.61
-    }
-  ],
-  "profilePath": "/workspace/group/data/freelance/profile.json",
-  "cvPath": "/workspace/group/data/freelance/CV.docx"
-}
+Compte le nombre total (N) pour le suivi de progression.
+
+Si aucune offre en attente, envoie via MCP :
+> "Aucune nouvelle offre en attente de traitement."
+
+Et arrête-toi.
+
+## Étape 2 — Boucle de traitement
+
+Pour CHAQUE offre pending (index i de 1 à N) :
+
+### 2a. Progression
+
+Envoie via `mcp__nanoclaw__send_message` :
+> "⏳ Traitement offre {i}/{N} : {titre de l'offre}..."
+
+### 2b. Lire le contexte
+
+```bash
+cat /workspace/extra/freelance-radar/{platform}/{slug}/context.md
 ```
 
-## Étape 2 — Scoring Tier 2 (sémantique)
+### 2c. Scoring Tier 2 (sémantique)
 
-Pour chaque offre, évalue la pertinence **au-delà des mots-clés** :
-
-### Ce que tu évalues (que le Tier 1 ne capture pas)
+Évalue la pertinence **au-delà des mots-clés** :
 
 - **Correspondances implicites** : "modernisation d'application legacy" = migration PHP/Symfony
-- **Contexte métier** : une offre "maintenance applicative SI" pour un ministère implique probablement du PHP
-- **Stack technique caché** : la description mentionne-t-elle des indices (framework, architecture, déploiement) ?
-- **Adéquation de séniorité** : le profil est Tech Lead/Chef de projet, l'offre correspond-elle ?
-- **Red flags** : stack incompatible malgré des mots-clés communs (ex: "maintenance applicative" mais sur SAP)
+- **Contexte métier** : "maintenance applicative SI" pour un ministère = probablement PHP
+- **Stack technique caché** : indices dans la description
+- **Adéquation séniorité** : profil Tech Lead/Chef de projet, 13 ans XP
+- **Red flags** : stack incompatible malgré des mots-clés communs (ex: TMA mais sur SAP/Oracle)
 
-### Format de sortie Tier 2
+Détermine :
+- `tier2Score` : 0.0 à 1.0
+- `recommendation` : `apply` (>= 0.7), `maybe` (0.5–0.7), `skip` (< 0.5)
+- `reasoning` : explication en 1-2 phrases
+- `matchedSkills` / `missingSkills`
 
-Pour chaque offre, détermine :
-```json
-{
-  "offerId": "boamp_26-29931",
-  "tier2Score": 0.85,
-  "recommendation": "apply",
-  "reasoning": "TMA web pour un site institutionnel, forte probabilité de stack PHP/Symfony. Profil parfaitement adapté (13 ans PHP, expérience TMA IDGarages).",
-  "matchedSkills": ["PHP", "Symfony", "TMA", "CI/CD"],
-  "missingSkills": [],
-  "redFlags": []
-}
+### 2d. Adapter le CV (si apply ou maybe)
+
+**Délègue au skill `resume-optimizer`** en lui fournissant :
+- Le chemin du context.md (contient l'offre et le scoring)
+- Le chemin de destination du CV : `/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx`
+
+Le skill `resume-optimizer` s'occupe de copier le CV original, l'adapter et le sauvegarder.
+
+### 2e. Mettre à jour le context.md
+
+Remplace le contenu avec les résultats :
+
+```markdown
+---
+status: processed
+platform: {platform}
+slug: {slug}
+tier1Score: {score}
+tier2Score: {tier2Score}
+recommendation: {apply|maybe|skip}
+processedAt: {date ISO}
+cvGenerated: {true|false}
+---
+
+# Analyse Tier 2
+
+## Recommendation : {apply|maybe|skip}
+
+{reasoning}
+
+## Compétences matchées
+{matchedSkills}
+
+## Compétences manquantes
+{missingSkills}
+
+## Adaptations CV
+{ce qui a été modifié dans le CV et pourquoi — rempli par resume-optimizer}
 ```
 
-- `recommendation` : `"apply"` (score >= 0.7), `"maybe"` (0.5-0.7), `"skip"` (< 0.5)
+## Étape 3 — Digest final
 
-## Étape 3 — Adaptation CV
-
-Pour les offres avec recommendation `"apply"` ou `"maybe"` :
-
-1. Lis le profil : `cat /workspace/project/data/freelance/profile.json`
-2. Utilise le skill **resume-optimizer** pour adapter le CV
-3. Sauvegarde le CV dans le dossier de l'offre : `{jobDir}/{platform}/{slug}/CV.docx`
-
-### Structure des fichiers
-
-Chaque offre a son dossier dans le repo `freelance-radar` :
+Après avoir traité TOUTES les offres, envoie via `mcp__nanoclaw__send_message` :
 
 ```
-freelance-radar/
-  boamp/
-    tma-site-institutionnel-val-de-marne/
-      description.md    ← déjà créé par le host (offre + scoring Tier 1)
-      CV.docx           ← toi tu ajoutes le CV adapté ici
-  free-work/
-    lead-dev-symfony-paris/
-      description.md
-      CV.docx
-```
+📋 *Traitement terminé* ({date})
 
-### Règles d'adaptation
+{N} offres analysées :
 
-- **Appels d'offre publics (BOAMP, PLACE)** :
-  - Style formel, vocabulaire administratif
-  - Mettre en avant : expériences secteur public, TMA, pilotage
-  - Mentionner conformité (RGPD, RGS, RGAA si pertinent)
-  - Structurer par compétences requises dans le marché
+🟢 *{titre}* — {plateforme}
+   Score Tier 2: {score} | CV généré ✅
+   {reasoning court}
 
-- **Freelance privé (Free-Work, etc.)** :
-  - Style dynamique, résultats chiffrés
-  - Mettre en avant autonomie et stack technique
-  - TJM et disponibilité en accroche
+🟡 *{titre}* — {plateforme}
+   Score Tier 2: {score} | CV généré ✅
 
-## Étape 4 — Envoyer le digest
-
-Utilise le MCP tool pour envoyer le résumé à l'utilisateur :
-
-```
-mcp__nanoclaw__send_message
-```
-
-### Format du digest
-
-```
-📋 *Nouvelles offres freelance* ({date})
-
-*{N} offres analysées, {M} pertinentes :*
-
-1. 🟢 **{titre}** — {plateforme}
-   Score: {tier2Score} | {buyer}
-   🔧 {matchedSkills}
-   📅 Deadline: {deadline}
-   🔗 {url}
-   📄 CV adapté : {cvFileName}
-
-2. 🟡 **{titre}** — {plateforme}
-   Score: {tier2Score} | {buyer}
-   ...
+🔴 *{titre}* — {plateforme}
+   Score Tier 2: {score} | Ignorée (skip)
+   {reasoning court}
 
 ───────
-💾 Réponds "détail offre {id}" pour voir l'analyse complète
-✅ Réponds "postule à {id}" pour marquer comme candidaté
-❌ Réponds "ignore {id}" pour ignorer
-```
-
-Légende des indicateurs :
-- 🟢 recommendation = `apply` (score >= 0.7)
-- 🟡 recommendation = `maybe` (score 0.5–0.7)
-- Ne pas inclure les `skip`
-
-### Si aucune offre pertinente
-
-```
-📋 *Scraping du {date}*
-
-{N} offres analysées — aucune suffisamment pertinente pour ton profil.
-
-Les filtres actuels cherchent : PHP, Symfony, TMA, DevOps, Chef de projet...
-```
-
-## Étape 5 — Nettoyage
-
-Après traitement, supprime le fichier d'entrée :
-```bash
-rm /workspace/ipc/input/autoapply_offers.json
+📂 CV et analyses dans freelance-radar
+✅ Traitement terminé — plus aucune tâche en cours.
 ```
 
 ## Règles
 
-- **Ne jamais inventer** des compétences ou expériences dans le CV
-- **Ne pas postuler** automatiquement — l'utilisateur valide toujours
-- **Toujours envoyer** un digest même si aucune offre n'est pertinente
-- **Garder le CV** à 2 pages maximum
-- Si le fichier d'offres n'existe pas, répondre qu'aucune nouvelle offre n'est disponible
+- **TOUJOURS traiter TOUTES les offres pending** — ne jamais s'arrêter après une seule
+- **Envoyer la progression** à chaque offre (i/N) via MCP
+- **Déléguer la génération CV** au skill resume-optimizer
+- **Ne pas postuler** automatiquement — l'utilisateur valide

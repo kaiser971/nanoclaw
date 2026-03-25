@@ -9,9 +9,17 @@ Adapte et optimise les CV pour des offres freelance, CDI, ou appels d'offre publ
 
 ## Sources de données
 
-- **Profil source de vérité** : `/workspace/group/data/freelance/profile.json`
-- **CV template** : `/workspace/group/data/freelance/CV.docx`
-- **CV générés** : `/workspace/group/data/freelance/cv-versions/`
+- **Profil source de vérité** : `/workspace/project/data/freelance/profile.json`
+- **CV original** : `/workspace/project/data/freelance/CV.docx`
+- **CV générés** : `/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx`
+
+## Règle critique
+
+**TOUJOURS copier le CV original avant de le modifier** :
+```bash
+cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{platform}/{slug}/CV.docx
+```
+Puis modifier la copie avec python-docx. Ne jamais générer un document from scratch — le formatage, les polices, les marges et la mise en page du Word original doivent être intégralement préservés.
 
 ## Workflow d'adaptation
 
@@ -77,17 +85,44 @@ Les CV passent souvent par un ATS (Applicant Tracking System). Optimiser :
 
 ### 5. Génération du fichier
 
-```bash
-# Lire le template
-# Modifier les sections via python-docx ou manipulation directe
-# Sauvegarder dans cv-versions/
+**OBLIGATOIRE — Suivre ces 2 étapes EXACTEMENT dans cet ordre :**
 
-# Nommage : cv-{platform}-{titre-court}-{date}.docx
-# Ex: cv-boamp-tma-education-2026-03-25.docx
-# Ex: cv-free-work-lead-symfony-2026-03-25.docx
+**Étape A** — Copier l'original (OBLIGATOIRE, ne jamais sauter cette étape) :
+```bash
+cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{platform}/{slug}/CV.docx
 ```
 
-Chemin de sortie : `/workspace/group/data/freelance/cv-versions/`
+**Étape B** — Modifier UNIQUEMENT le texte de la copie avec python-docx :
+```bash
+python3 << 'PYSCRIPT'
+from docx import Document
+
+cv_path = "/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx"
+doc = Document(cv_path)
+
+# Parcourir les cellules des tableaux existants
+for table in doc.tables:
+    for row in table.rows:
+        for cell in row.cells:
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    # Remplacer le texte dans les runs EXISTANTS
+                    if "ancien texte" in run.text:
+                        run.text = run.text.replace("ancien texte", "nouveau texte")
+
+doc.save(cv_path)
+PYSCRIPT
+```
+
+**INTERDIT :**
+- `Document()` sans argument (crée un doc vide au lieu d'ouvrir la copie)
+- `doc.add_paragraph()`, `doc.add_table()` (ajoute des éléments qui n'existent pas dans l'original)
+- Supprimer des paragraphes ou des runs
+- Générer un nouveau document from scratch de quelque manière que ce soit
+
+**Le fichier de sortie DOIT être visuellement identique à l'original** (même mise en page, polices, couleurs, marges). Seul le contenu textuel change.
+
+Chemin de sortie : `/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx`
 
 ### 6. Notes d'adaptation
 

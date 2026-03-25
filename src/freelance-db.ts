@@ -12,18 +12,23 @@ import { logger } from './logger.js';
 import type { FreelanceOffer, OfferStatus, ScrapedOffer } from './scrapers/types.js';
 
 let db: Database.Database;
+let initialized = false;
 
 export function initFreelanceDb(): void {
+  if (initialized) return;
+
   const dbPath = path.join(STORE_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   db = new Database(dbPath);
   createFreelanceSchema(db);
+  initialized = true;
 }
 
 /** @internal - for tests only. */
 export function _initFreelanceTestDb(database: Database.Database): void {
   db = database;
   createFreelanceSchema(db);
+  initialized = true;
 }
 
 function createFreelanceSchema(database: Database.Database): void {

@@ -15,6 +15,7 @@ import {
   updateOfferScore,
   getOfferById,
   getOfferStats,
+  getTopOffers,
 } from '../freelance-db.js';
 import { RATE_LIMITS, SCORING_CONFIG, FREELANCE_SEARCH_TERMS, ALL_SEARCH_TERMS } from './config.js';
 import { scoreOffer } from './relevance.js';
@@ -25,7 +26,7 @@ import { boampScraper } from './platforms/boamp.js';
 import { freeWorkScraper } from './platforms/free-work.js';
 
 /** All registered scrapers. Add new ones here. */
-const SCRAPERS: Scraper[] = [boampScraper, freeWorkScraper];
+const SCRAPERS: Scraper[] = [/* boampScraper, */ freeWorkScraper];
 
 interface InsertedOffer {
   id: string;
@@ -260,7 +261,47 @@ ${score >= 0.6 ? '🟢 **Fortement recommandée**' : score >= 0.4 ? '🟡 **Corr
 `;
 
   fs.writeFileSync(descPath, md, 'utf-8');
-  logger.info({ platform: offer.platform, slug }, 'Offer description written to JOBTOAPPLY');
+
+  // Write context.md for container processing
+  const contextPath = path.join(offerDir, 'context.md');
+  if (!fs.existsSync(contextPath)) {
+    const context = `---
+status: pending
+platform: ${offer.platform}
+slug: ${slug}
+offerId: ${offer.platform}_${offer.platformId}
+tier1Score: ${score.toFixed(2)}
+createdAt: ${now}
+---
+
+# Contexte pour adaptation CV
+
+## Offre
+- **Titre** : ${offer.title}
+- **Acheteur** : ${offer.buyer || '—'}
+- **Type** : ${offer.offerType}
+- **URL** : ${offer.url}
+- **Deadline** : ${offer.deadline?.slice(0, 10) || '—'}
+- **Compétences** : ${skills}
+
+## Description complète
+
+${offer.description || '*Consulter l\'URL de l\'offre pour la description complète.*'}
+
+## Scoring Tier 1
+
+Score: **${score.toFixed(2)}** | Domain: ${breakdown.domainRelevance?.toFixed(2)} | Skills: ${breakdown.skillMatch?.toFixed(2)} | XP: ${breakdown.experienceMatch?.toFixed(2)}
+
+## Instructions
+
+1. Faire le scoring Tier 2 (analyse sémantique)
+2. Si recommendation "apply" ou "maybe" : générer un CV adapté
+3. Mettre à jour ce fichier avec les résultats (status: processed)
+`;
+    fs.writeFileSync(contextPath, context, 'utf-8');
+  }
+
+  logger.info({ platform: offer.platform, slug }, 'Offer description + context written');
 }
 
 /**
@@ -379,16 +420,25 @@ export function registerAutoapplyTasks(): void {
         commitJobRepo(result.totalInserted);
       }
 
-      if (pertinent.length > 0) {
-        writeOffersToIpc('main', result.newOffers);
-      }
-
       return {
         result: `${result.totalScraped} scraped, ${result.totalInserted} new, ${pertinent.length} pertinent`,
         triggerContainer:
           pertinent.length > 0
             ? {
-                prompt: `${pertinent.length} nouvelles offres freelance pertinentes ont été trouvées. Analyse-les avec le skill freelance-cv : lis /workspace/ipc/input/autoapply_offers.json, fais le scoring Tier 2, adapte les CV, et envoie le digest.`,
+                prompt: `${pertinent.length} nouvelles offres freelance à traiter.
+
+INSTRUCTIONS OBLIGATOIRES :
+1. Lance : grep -rl "status: pending" /workspace/extra/freelance-radar/*/context.md
+2. Pour CHAQUE offre pending, AVANT de la traiter, envoie un message via mcp__nanoclaw__send_message : "⏳ Traitement offre X/${pertinent.length} : [titre]..."
+3. Lis le context.md, fais le scoring Tier 2, adapte le CV (copie + modifie /workspace/project/data/freelance/CV.docx avec python-docx)
+4. Mets à jour le context.md avec status: processed et les résultats
+5. APRÈS avoir traité TOUTES les offres, envoie un digest final via mcp__nanoclaw__send_message
+
+Profil : /workspace/project/data/freelance/profile.json
+CV source : /workspace/project/data/freelance/CV.docx
+Repo offres : /workspace/extra/freelance-radar/
+
+Utilise les skills freelance-cv et resume-optimizer.`,
               }
             : undefined,
       };
@@ -405,6 +455,47 @@ export function registerAutoapplyTasks(): void {
 
     logger.info('Autoapply host tasks registered');
   });
+}
+
+/**
+ * Build a WhatsApp-friendly digest message from scraping results.
+ */
+export function buildDigest(resultSummary: string): string | null {
+  // resultSummary format: "17 scraped, 5 new, 5 pertinent"
+  const match = resultSummary.match(/(\d+) scraped, (\d+) new, (\d+) pertinent/);
+  if (!match) return null;
+
+  const [, scraped, newCount, pertinent] = match;
+
+  // Get the latest offers from DB for the digest
+  const topOffers = getTopOffers(5);
+  if (topOffers.length === 0) return null;
+
+  const date = new Date().toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  let digest = `📋 *Scraping du ${date}*\n\n`;
+  digest += `${scraped} offres analysées, ${newCount} nouvelles, ${pertinent} pertinentes\n\n`;
+  digest += `*Top offres :*\n\n`;
+
+  for (const offer of topOffers) {
+    const icon = offer.relevanceScore >= 0.6 ? '🟢' : offer.relevanceScore >= 0.4 ? '🟡' : '🟠';
+    const tjm = offer.tjmMin ? `${offer.tjmMin}–${offer.tjmMax || '?'}€/j` : '';
+    const deadline = offer.deadline ? `⏰ ${offer.deadline.slice(0, 10)}` : '';
+
+    digest += `${icon} *${offer.title.slice(0, 60)}*\n`;
+    digest += `   [${offer.platform}] ${offer.buyer || ''} ${tjm}\n`;
+    digest += `   Score: ${offer.relevanceScore.toFixed(2)} ${deadline}\n`;
+    digest += `   ${offer.url}\n\n`;
+  }
+
+  digest += `───────\n`;
+  digest += `📂 Détails dans le repo freelance-radar`;
+
+  return digest;
 }
 
 /**

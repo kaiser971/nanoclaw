@@ -85,7 +85,7 @@ function parseJobCardsFromHtml(html: string): ScrapedOffer[] {
 
   // Free-Work actual job URLs contain "/job-mission/"
   // e.g. /fr/tech-it/developpeur-php/job-mission/lead-dev-symfony-42
-  $('a[href*="/job-mission/"]').each((_, el) => {
+  $('a[href*="/job-mission/"]').each((_: number, el: any) => {
     const $card = $(el);
     const href = $card.attr('href') || '';
 
@@ -103,7 +103,7 @@ function parseJobCardsFromHtml(html: string): ScrapedOffer[] {
     const fullUrl = `https://www.free-work.com${href}`;
 
     // Extract tags (Freelance/CDI) from the card
-    const tags = $card.find('.tag, [class*="tag"]').map((_, t) => $(t).text().trim()).get();
+    const tags = $card.find('.tag, [class*="tag"]').map((_: number, t: any) => $(t).text().trim()).get();
     const isFreelance = tags.some((t: string) => /freelance/i.test(t));
     const isCdi = tags.some((t: string) => /cdi/i.test(t));
 

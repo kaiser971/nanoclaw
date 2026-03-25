@@ -52,21 +52,18 @@ export const SEARCH_CATEGORIES = {
 
 export const ALL_SEARCH_TERMS = Object.values(SEARCH_CATEGORIES).flat();
 
-/** Terms used to search freelance job boards. */
+/** Terms used to search freelance job boards. Kept specific to avoid noise. */
 export const FREELANCE_SEARCH_TERMS = [
-  'PHP',
-  'Symfony',
-  'Laravel',
-  'Python',
-  'Node.js',
-  'TypeScript',
-  'React',
-  'DevOps',
-  'Docker',
-  'Tech Lead',
-  'Lead Developer',
-  'Full Stack',
-  'Chef de projet',
+  'PHP Symfony',
+  'PHP Laravel',
+  'Développeur PHP',
+  'Lead Dev PHP',
+  'Tech Lead PHP',
+  'Chef de projet web',
+  'Full Stack PHP',
+  'Symfony développeur',
+  'TMA applicative',
+  'Maintenance applicative',
 ];
 
 // --- Rate limits ---

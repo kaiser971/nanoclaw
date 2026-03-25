@@ -719,6 +719,50 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
+    enqueueContainerRun: (chatJid, prompt, groupFolder) => {
+      logger.info({ chatJid, groupFolder, promptLength: prompt.length }, '[AUTOAPPLY] enqueueContainerRun called');
+      const group = Object.values(registeredGroups).find(
+        (g) => g.folder === groupFolder,
+      );
+      if (!group) {
+        logger.warn({ groupFolder }, '[AUTOAPPLY] Cannot enqueue container: group not found');
+        return;
+      }
+      const isMain = group.isMain === true;
+      queue.enqueueTask(chatJid, `autoapply-tier2-${Date.now()}`, async () => {
+        const output = await runContainerAgent(
+          group,
+          {
+            prompt,
+            sessionId: sessions[groupFolder],
+            groupFolder,
+            chatJid,
+            isMain,
+            isScheduledTask: true,
+            assistantName: ASSISTANT_NAME,
+          },
+          (proc, containerName) =>
+            queue.registerProcess(chatJid, proc, containerName, groupFolder),
+          async (streamedOutput: ContainerOutput) => {
+            if (streamedOutput.result) {
+              const channel = findChannel(channels, chatJid);
+              if (channel) {
+                const text = formatOutbound(streamedOutput.result);
+                if (text) await channel.sendMessage(chatJid, text);
+              }
+            }
+            if (streamedOutput.status === 'success') {
+              queue.notifyIdle(chatJid);
+            }
+          },
+        );
+        if (output.newSessionId) {
+          sessions[groupFolder] = output.newSessionId;
+          setSession(groupFolder, output.newSessionId);
+        }
+      });
+      logger.info({ chatJid, groupFolder }, 'Container run enqueued for Tier 2 + CV');
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

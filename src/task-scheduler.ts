@@ -169,6 +169,7 @@ async function runTask(
       const nextRun = computeNextRun(task);
       updateTaskAfterRun(task.id, nextRun, result.slice(0, 200));
 
+      // Optionally trigger a container after host task completes
       if (triggerContainer) {
         logger.info(
           { taskId: task.id },
