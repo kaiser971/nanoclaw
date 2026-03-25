@@ -216,7 +216,6 @@ function buildVolumeMounts(
 async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
-  isMain: boolean,
   agentIdentifier?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
@@ -248,14 +247,7 @@ async function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    if (isMain) {
-      // Main containers start as root so the entrypoint can mount --bind
-      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
-      args.push('-e', `RUN_UID=${hostUid}`);
-      args.push('-e', `RUN_GID=${hostGid}`);
-    } else {
-      args.push('--user', `${hostUid}:${hostGid}`);
-    }
+    args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -293,7 +285,6 @@ export async function runContainerAgent(
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
-    input.isMain,
     agentIdentifier,
   );
 
