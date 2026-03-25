@@ -17,7 +17,9 @@ interface FreeWorkJsonLd {
   datePosted?: string;
   validThrough?: string;
   hiringOrganization?: { name?: string };
-  jobLocation?: { address?: { addressLocality?: string; addressRegion?: string } };
+  jobLocation?: {
+    address?: { addressLocality?: string; addressRegion?: string };
+  };
   baseSalary?: {
     value?: { minValue?: number; maxValue?: number; value?: number };
   };
@@ -103,7 +105,10 @@ function parseJobCardsFromHtml(html: string): ScrapedOffer[] {
     const fullUrl = `https://www.free-work.com${href}`;
 
     // Extract tags (Freelance/CDI) from the card
-    const tags = $card.find('.tag, [class*="tag"]').map((_: number, t: any) => $(t).text().trim()).get();
+    const tags = $card
+      .find('.tag, [class*="tag"]')
+      .map((_: number, t: any) => $(t).text().trim())
+      .get();
     const isFreelance = tags.some((t: string) => /freelance/i.test(t));
     const isCdi = tags.some((t: string) => /cdi/i.test(t));
 
@@ -237,10 +242,7 @@ export const freeWorkScraper: Scraper = {
 
   async test(): Promise<{ ok: boolean; error?: string }> {
     try {
-      const html = await fetchHtml(
-        FREE_WORK_CONFIG.BASE_URL,
-        30_000,
-      );
+      const html = await fetchHtml(FREE_WORK_CONFIG.BASE_URL, 30_000);
 
       // Check JSON-LD
       const jsonLd = extractJsonLd(html);

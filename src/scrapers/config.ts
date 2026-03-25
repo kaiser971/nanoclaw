@@ -81,7 +81,8 @@ export const RATE_LIMITS = {
 // --- BOAMP API ---
 
 export const BOAMP_CONFIG = {
-  API_BASE: 'https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets',
+  API_BASE:
+    'https://boamp-datadila.opendatasoft.com/api/explore/v2.1/catalog/datasets',
   DATASET: 'boamp',
   DATASET_HTML: 'boamp-html',
   NOTICE_URL_TEMPLATE: 'https://www.boamp.fr/pages/avis/?q=idweb:{idweb}',
@@ -111,11 +112,11 @@ export const SCORING_CONFIG = {
   TIER2_THRESHOLD: 0.6,
   MAX_OFFERS_FOR_TIER2: 20,
   TIER1_WEIGHTS: {
-    skillMatch: 0.40,
-    experienceMatch: 0.20,
+    skillMatch: 0.4,
+    experienceMatch: 0.2,
     locationMatch: 0.15,
     tjmMatch: 0.15,
-    freshnessBonus: 0.10,
+    freshnessBonus: 0.1,
   },
 } as const;
 
@@ -124,7 +125,6 @@ export const SCORING_CONFIG = {
 export const HTTP_CONFIG = {
   USER_AGENT:
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  ACCEPT:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  ACCEPT: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   ACCEPT_LANGUAGE: 'fr-FR,fr;q=0.9,en;q=0.5',
 } as const;

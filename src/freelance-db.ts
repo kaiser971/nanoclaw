@@ -9,7 +9,11 @@ import path from 'path';
 
 import { STORE_DIR } from './config.js';
 import { logger } from './logger.js';
-import type { FreelanceOffer, OfferStatus, ScrapedOffer } from './scrapers/types.js';
+import type {
+  FreelanceOffer,
+  OfferStatus,
+  ScrapedOffer,
+} from './scrapers/types.js';
 
 let db: Database.Database;
 let initialized = false;
@@ -228,11 +232,7 @@ export function updateOfferStatus(id: string, status: OfferStatus): void {
   );
 }
 
-export function updateOfferScore(
-  id: string,
-  score: number,
-  tier: 1 | 2,
-): void {
+export function updateOfferScore(id: string, score: number, tier: 1 | 2): void {
   const col = tier === 1 ? 'relevance_score' : 'relevance_score_t2';
   db.prepare(`UPDATE freelance_offers SET ${col} = ? WHERE id = ?`).run(
     score,

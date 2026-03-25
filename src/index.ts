@@ -720,12 +720,18 @@ async function main(): Promise<void> {
       }
     },
     enqueueContainerRun: (chatJid, prompt, groupFolder) => {
-      logger.info({ chatJid, groupFolder, promptLength: prompt.length }, '[AUTOAPPLY] enqueueContainerRun called');
+      logger.info(
+        { chatJid, groupFolder, promptLength: prompt.length },
+        '[AUTOAPPLY] enqueueContainerRun called',
+      );
       const group = Object.values(registeredGroups).find(
         (g) => g.folder === groupFolder,
       );
       if (!group) {
-        logger.warn({ groupFolder }, '[AUTOAPPLY] Cannot enqueue container: group not found');
+        logger.warn(
+          { groupFolder },
+          '[AUTOAPPLY] Cannot enqueue container: group not found',
+        );
         return;
       }
       const isMain = group.isMain === true;
@@ -761,7 +767,10 @@ async function main(): Promise<void> {
           setSession(groupFolder, output.newSessionId);
         }
       });
-      logger.info({ chatJid, groupFolder }, 'Container run enqueued for Tier 2 + CV');
+      logger.info(
+        { chatJid, groupFolder },
+        'Container run enqueued for Tier 2 + CV',
+      );
     },
   });
   queue.setProcessMessagesFn(processGroupMessages);

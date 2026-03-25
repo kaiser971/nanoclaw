@@ -24,7 +24,11 @@ export interface IpcDeps {
   ) => void;
   onTasksChanged: () => void;
   /** Optional: trigger a container agent run (for follow-up after host tasks). */
-  enqueueContainerRun?: (chatJid: string, prompt: string, groupFolder: string) => void;
+  enqueueContainerRun?: (
+    chatJid: string,
+    prompt: string,
+    groupFolder: string,
+  ) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -419,7 +423,10 @@ export async function processTaskIpc(
           );
           break;
         }
-        logger.info({ taskId: data.taskId, sourceGroup }, 'Running host task via IPC');
+        logger.info(
+          { taskId: data.taskId, sourceGroup },
+          'Running host task via IPC',
+        );
         const startTime = Date.now();
         try {
           const { result, triggerContainer } = await fn();
@@ -430,15 +437,26 @@ export async function processTaskIpc(
 
           // Trigger follow-up container for Tier 2 scoring + CV generation
           if (triggerContainer) {
-            logger.info({ taskId: data.taskId, promptLength: triggerContainer.prompt.length }, '[AUTOAPPLY] Preparing follow-up container');
-            const chatJid = Object.entries(deps.registeredGroups())
-              .find(([, g]) => g.folder === sourceGroup)?.[0];
+            logger.info(
+              {
+                taskId: data.taskId,
+                promptLength: triggerContainer.prompt.length,
+              },
+              '[AUTOAPPLY] Preparing follow-up container',
+            );
+            const chatJid = Object.entries(deps.registeredGroups()).find(
+              ([, g]) => g.folder === sourceGroup,
+            )?.[0];
             if (chatJid) {
               // Send quick digest first
-              const { buildDigest } = await import('./scrapers/orchestrator.js');
+              const { buildDigest } =
+                await import('./scrapers/orchestrator.js');
               const digest = buildDigest(result);
               if (digest) {
-                logger.info({ digestLength: digest.length }, '[AUTOAPPLY] Sending digest to user');
+                logger.info(
+                  { digestLength: digest.length },
+                  '[AUTOAPPLY] Sending digest to user',
+                );
                 await deps.sendMessage(chatJid, digest);
               } else {
                 logger.warn('[AUTOAPPLY] buildDigest returned null');
@@ -446,20 +464,40 @@ export async function processTaskIpc(
 
               // Then trigger container for Tier 2 + CV
               if (deps.enqueueContainerRun) {
-                logger.info({ chatJid, sourceGroup, promptLength: triggerContainer.prompt.length }, '[AUTOAPPLY] Enqueuing container for Tier 2 + CV');
-                deps.enqueueContainerRun(chatJid, triggerContainer.prompt, sourceGroup);
+                logger.info(
+                  {
+                    chatJid,
+                    sourceGroup,
+                    promptLength: triggerContainer.prompt.length,
+                  },
+                  '[AUTOAPPLY] Enqueuing container for Tier 2 + CV',
+                );
+                deps.enqueueContainerRun(
+                  chatJid,
+                  triggerContainer.prompt,
+                  sourceGroup,
+                );
               } else {
                 logger.warn('[AUTOAPPLY] enqueueContainerRun not available');
               }
             } else {
-              logger.warn({ sourceGroup }, '[AUTOAPPLY] No chatJid found for group');
+              logger.warn(
+                { sourceGroup },
+                '[AUTOAPPLY] No chatJid found for group',
+              );
             }
           } else {
-            logger.info({ taskId: data.taskId }, '[AUTOAPPLY] No pertinent offers, skipping container');
+            logger.info(
+              { taskId: data.taskId },
+              '[AUTOAPPLY] No pertinent offers, skipping container',
+            );
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
-          logger.error({ taskId: data.taskId, error }, 'Host task failed via IPC');
+          logger.error(
+            { taskId: data.taskId, error },
+            'Host task failed via IPC',
+          );
         }
       }
       break;

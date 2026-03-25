@@ -12,16 +12,40 @@ import type { ScrapedOffer } from './types.js';
 
 /** Domain keywords that indicate an offer is in-scope for the profile. */
 const DOMAIN_KEYWORDS = [
-  'maintenance applicative', 'tma', 'mco applicatif',
-  'développement web', 'application web', 'site web', 'site internet',
-  'fullstack', 'full stack', 'full-stack', 'backend', 'back-end',
-  'api rest', 'api', 'web service',
-  'refonte', 'migration', 'modernisation',
-  'e-learning', 'plateforme', 'portail',
-  'intelligence artificielle', 'ia', 'machine learning',
-  'devops', 'ci/cd', 'intégration continue',
-  'chef de projet', 'pilotage', 'moe', 'maîtrise d\'oeuvre',
-  'lead', 'tech lead', 'lead dev',
+  'maintenance applicative',
+  'tma',
+  'mco applicatif',
+  'développement web',
+  'application web',
+  'site web',
+  'site internet',
+  'fullstack',
+  'full stack',
+  'full-stack',
+  'backend',
+  'back-end',
+  'api rest',
+  'api',
+  'web service',
+  'refonte',
+  'migration',
+  'modernisation',
+  'e-learning',
+  'plateforme',
+  'portail',
+  'intelligence artificielle',
+  'ia',
+  'machine learning',
+  'devops',
+  'ci/cd',
+  'intégration continue',
+  'chef de projet',
+  'pilotage',
+  'moe',
+  "maîtrise d'oeuvre",
+  'lead',
+  'tech lead',
+  'lead dev',
 ];
 
 // --- Profile types ---
@@ -69,8 +93,7 @@ export function loadProfile(profilePath?: string): Profile {
   if (cachedProfile) return cachedProfile;
 
   const filePath =
-    profilePath ||
-    path.resolve(process.cwd(), 'data/freelance/profile.json');
+    profilePath || path.resolve(process.cwd(), 'data/freelance/profile.json');
 
   const raw = fs.readFileSync(filePath, 'utf-8');
   cachedProfile = JSON.parse(raw) as Profile;
@@ -135,7 +158,10 @@ function scoreTitle(
   profileAliases: Set<string>,
   excludedSkills: Set<string>,
 ): number {
-  const words = title.toLowerCase().split(/[\s,/\-()]+/).filter(w => w.length > 2);
+  const words = title
+    .toLowerCase()
+    .split(/[\s,/\-()]+/)
+    .filter((w) => w.length > 2);
   if (words.length === 0) return 0.5;
 
   let matches = 0;
@@ -208,8 +234,7 @@ function scoreFreshness(datePublished: string | undefined): number {
   const published = new Date(datePublished).getTime();
   if (isNaN(published)) return 0.5;
 
-  const ageInDays =
-    (Date.now() - published) / (1000 * 60 * 60 * 24);
+  const ageInDays = (Date.now() - published) / (1000 * 60 * 60 * 24);
 
   if (ageInDays <= 1) return 1.0;
   if (ageInDays <= 3) return 0.8;
@@ -233,10 +258,7 @@ function scoreDomainRelevance(offer: ScrapedOffer): number {
   return 0.2; // no domain keyword match at all
 }
 
-function scoreExperienceMatch(
-  offer: ScrapedOffer,
-  profile: Profile,
-): number {
+function scoreExperienceMatch(offer: ScrapedOffer, profile: Profile): number {
   const text = `${offer.title} ${offer.description || ''}`.toLowerCase();
 
   // Look for seniority indicators

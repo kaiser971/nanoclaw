@@ -17,7 +17,12 @@ import {
   getOfferStats,
   getTopOffers,
 } from '../freelance-db.js';
-import { RATE_LIMITS, SCORING_CONFIG, FREELANCE_SEARCH_TERMS, ALL_SEARCH_TERMS } from './config.js';
+import {
+  RATE_LIMITS,
+  SCORING_CONFIG,
+  FREELANCE_SEARCH_TERMS,
+  ALL_SEARCH_TERMS,
+} from './config.js';
 import { scoreOffer } from './relevance.js';
 import type { ScrapedOffer, Scraper, ScraperRunConfig } from './types.js';
 
@@ -38,7 +43,8 @@ interface InsertedOffer {
 
 /** Path to the job tracking repo. Configurable via env var. */
 const JOB_REPO_DIR = path.resolve(
-  process.env.AUTOAPPLY_JOB_REPO || path.join(process.cwd(), '..', 'freelance-radar'),
+  process.env.AUTOAPPLY_JOB_REPO ||
+    path.join(process.cwd(), '..', 'freelance-radar'),
 );
 
 function slugify(text: string): string {
@@ -75,10 +81,7 @@ export async function runAllScrapers(): Promise<ScrapingResult> {
     errors: [],
   };
 
-  logger.info(
-    { scraperCount: SCRAPERS.length },
-    'Starting scraping run',
-  );
+  logger.info({ scraperCount: SCRAPERS.length }, 'Starting scraping run');
 
   for (let i = 0; i < SCRAPERS.length; i++) {
     const scraper = SCRAPERS[i];
@@ -86,7 +89,9 @@ export async function runAllScrapers(): Promise<ScrapingResult> {
     // Build config per scraper
     const config: ScraperRunConfig = {
       searchTerms:
-        scraper.platform === 'boamp' ? ALL_SEARCH_TERMS : FREELANCE_SEARCH_TERMS,
+        scraper.platform === 'boamp'
+          ? ALL_SEARCH_TERMS
+          : FREELANCE_SEARCH_TERMS,
       maxPages: RATE_LIMITS.MAX_PAGES_PER_RUN,
       requestDelay: RATE_LIMITS.SAME_DOMAIN_DELAY,
       timeout: RATE_LIMITS.REQUEST_TIMEOUT,
@@ -140,12 +145,20 @@ export async function runAllScrapers(): Promise<ScrapingResult> {
           });
 
           logger.debug(
-            { platform: scraper.platform, id: offer.platformId, score, title: offer.title.slice(0, 60) },
+            {
+              platform: scraper.platform,
+              id: offer.platformId,
+              score,
+              title: offer.title.slice(0, 60),
+            },
             'New offer stored and scored',
           );
           if (inserted >= RATE_LIMITS.MAX_NEW_RESULTS) {
             logger.info(
-              { platform: scraper.platform, limit: RATE_LIMITS.MAX_NEW_RESULTS },
+              {
+                platform: scraper.platform,
+                limit: RATE_LIMITS.MAX_NEW_RESULTS,
+              },
               'Max new results reached, stopping scraper',
             );
             break;
@@ -163,10 +176,7 @@ export async function runAllScrapers(): Promise<ScrapingResult> {
       );
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      logger.error(
-        { platform: scraper.platform, err },
-        'Scraper failed',
-      );
+      logger.error({ platform: scraper.platform, err }, 'Scraper failed');
       result.errors.push({ platform: scraper.platform, error: errorMsg });
     }
 
@@ -232,7 +242,7 @@ ${skills}
 
 ## Description
 
-${offer.description || '*Description non disponible — consulter l\'URL de l\'offre.*'}
+${offer.description || "*Description non disponible — consulter l'URL de l'offre.*"}
 
 ## Scoring Tier 1 (automatique)
 
@@ -286,7 +296,7 @@ createdAt: ${now}
 
 ## Description complète
 
-${offer.description || '*Consulter l\'URL de l\'offre pour la description complète.*'}
+${offer.description || "*Consulter l'URL de l'offre pour la description complète.*"}
 
 ## Scoring Tier 1
 
@@ -301,7 +311,10 @@ Score: **${score.toFixed(2)}** | Domain: ${breakdown.domainRelevance?.toFixed(2)
     fs.writeFileSync(contextPath, context, 'utf-8');
   }
 
-  logger.info({ platform: offer.platform, slug }, 'Offer description + context written');
+  logger.info(
+    { platform: offer.platform, slug },
+    'Offer description + context written',
+  );
 }
 
 /**
@@ -309,7 +322,10 @@ Score: **${score.toFixed(2)}** | Domain: ${breakdown.domainRelevance?.toFixed(2)
  */
 function commitJobRepo(offerCount: number): void {
   if (!fs.existsSync(path.join(JOB_REPO_DIR, '.git'))) {
-    logger.warn({ dir: JOB_REPO_DIR }, 'Job repo not initialized, skipping commit');
+    logger.warn(
+      { dir: JOB_REPO_DIR },
+      'Job repo not initialized, skipping commit',
+    );
     return;
   }
 
@@ -445,9 +461,8 @@ Utilise les skills freelance-cv et resume-optimizer.`,
     });
 
     registerHostTask('autoapply_cleanup', async () => {
-      const { markExpiredOffers, purgeOldOffers } = await import(
-        '../freelance-db.js'
-      );
+      const { markExpiredOffers, purgeOldOffers } =
+        await import('../freelance-db.js');
       const expired = markExpiredOffers();
       const purged = purgeOldOffers(90);
       return { result: `${expired} expired, ${purged} purged` };
@@ -462,7 +477,9 @@ Utilise les skills freelance-cv et resume-optimizer.`,
  */
 export function buildDigest(resultSummary: string): string | null {
   // resultSummary format: "17 scraped, 5 new, 5 pertinent"
-  const match = resultSummary.match(/(\d+) scraped, (\d+) new, (\d+) pertinent/);
+  const match = resultSummary.match(
+    /(\d+) scraped, (\d+) new, (\d+) pertinent/,
+  );
   if (!match) return null;
 
   const [, scraped, newCount, pertinent] = match;
@@ -482,7 +499,12 @@ export function buildDigest(resultSummary: string): string | null {
   digest += `*Top offres :*\n\n`;
 
   for (const offer of topOffers) {
-    const icon = offer.relevanceScore >= 0.6 ? '🟢' : offer.relevanceScore >= 0.4 ? '🟡' : '🟠';
+    const icon =
+      offer.relevanceScore >= 0.6
+        ? '🟢'
+        : offer.relevanceScore >= 0.4
+          ? '🟡'
+          : '🟠';
     const tjm = offer.tjmMin ? `${offer.tjmMin}–${offer.tjmMax || '?'}€/j` : '';
     const deadline = offer.deadline ? `⏰ ${offer.deadline.slice(0, 10)}` : '';
 
