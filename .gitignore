@@ -36,3 +36,4 @@ groups/global/*
 .nanoclaw/
 
 agents-sdk-docs
+tools/boamp/oauth_credentials.json
