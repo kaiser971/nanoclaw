@@ -5,7 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, logTaskRun, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -394,6 +394,49 @@ export async function processTaskIpc(
           'Task updated via IPC',
         );
         deps.onTasksChanged();
+      }
+      break;
+
+    case 'run_host_task':
+      // Run a registered host-side function immediately (no scheduler delay).
+      // Main group only. Used for on-demand scraping from WhatsApp.
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized run_host_task attempt blocked',
+        );
+        break;
+      }
+      if (data.taskId) {
+        const { getHostTask } = await import('./task-scheduler.js');
+        const fn = getHostTask(data.taskId);
+        if (!fn) {
+          logger.warn(
+            { taskId: data.taskId },
+            'Unknown host task requested via IPC',
+          );
+          break;
+        }
+        logger.info({ taskId: data.taskId, sourceGroup }, 'Running host task via IPC');
+        const startTime = Date.now();
+        try {
+          const { result } = await fn();
+          logTaskRun({
+            task_id: `ipc-${data.taskId}`,
+            run_at: new Date().toISOString(),
+            duration_ms: Date.now() - startTime,
+            status: 'success',
+            result,
+            error: null,
+          });
+          logger.info(
+            { taskId: data.taskId, durationMs: Date.now() - startTime, result },
+            'Host task completed via IPC',
+          );
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          logger.error({ taskId: data.taskId, error }, 'Host task failed via IPC');
+        }
       }
       break;
 

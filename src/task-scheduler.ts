@@ -21,6 +21,26 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
+// --- Host-side task registry ---
+
+export type HostTaskFn = () => Promise<{
+  result: string;
+  triggerContainer?: { prompt: string };
+}>;
+
+const hostTaskRegistry = new Map<string, HostTaskFn>();
+
+/** Register a function to be called for HOST: prefixed tasks. */
+export function registerHostTask(name: string, fn: HostTaskFn): void {
+  hostTaskRegistry.set(name, fn);
+  logger.info({ name }, 'Registered host task');
+}
+
+/** Get a registered host task by name. Used by IPC for on-demand execution. */
+export function getHostTask(name: string): HostTaskFn | undefined {
+  return hostTaskRegistry.get(name);
+}
+
 /**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
@@ -108,6 +128,81 @@ async function runTask(
     'Running scheduled task',
   );
 
+  // --- Host-side task execution (HOST: prefix) ---
+  if (task.prompt.startsWith('HOST:')) {
+    const fnName = task.prompt.slice(5);
+    const fn = hostTaskRegistry.get(fnName);
+    if (!fn) {
+      const error = `Unknown host task: ${fnName}`;
+      logger.error({ taskId: task.id, fnName }, error);
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: Date.now() - startTime,
+        status: 'error',
+        result: null,
+        error,
+      });
+      const nextRun = computeNextRun(task);
+      updateTaskAfterRun(task.id, nextRun, `Error: ${error}`);
+      return;
+    }
+
+    try {
+      const { result, triggerContainer } = await fn();
+      const durationMs = Date.now() - startTime;
+
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: durationMs,
+        status: 'success',
+        result,
+        error: null,
+      });
+
+      logger.info(
+        { taskId: task.id, durationMs, result },
+        'Host task completed',
+      );
+
+      const nextRun = computeNextRun(task);
+      updateTaskAfterRun(task.id, nextRun, result.slice(0, 200));
+
+      if (triggerContainer) {
+        logger.info(
+          { taskId: task.id },
+          'Host task triggering follow-up container',
+        );
+        deps.queue.enqueueTask(task.chat_jid, `${task.id}-followup`, () =>
+          runTask(
+            {
+              ...task,
+              id: `${task.id}-followup`,
+              prompt: triggerContainer.prompt,
+            },
+            deps,
+          ),
+        );
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: Date.now() - startTime,
+        status: 'error',
+        result: null,
+        error,
+      });
+      logger.error({ taskId: task.id, error }, 'Host task failed');
+      const nextRun = computeNextRun(task);
+      updateTaskAfterRun(task.id, nextRun, `Error: ${error}`);
+    }
+    return;
+  }
+
+  // --- Container task execution (existing behavior) ---
   const groups = deps.registeredGroups();
   const group = Object.values(groups).find(
     (g) => g.folder === task.group_folder,
