@@ -66,6 +66,34 @@ export const FREELANCE_SEARCH_TERMS = [
   'Maintenance applicative',
 ];
 
+/**
+ * Title fragments that hard-reject an offer before scoring.
+ * Used to filter categories that consistently produce false positives
+ * (ERP fonctionnel, SAP, Oracle, CRM propriétaires, etc.).
+ */
+export const EXCLUDED_TITLE_PATTERNS = [
+  'sap',
+  'oracle',
+  'salesforce',
+  'dynamics',
+  'servicenow',
+  'sharepoint',
+  'erp',
+  'progiciel',
+  'business analyst',
+  'consultant fonctionnel',
+  'administrateur applicatif',
+  'consultant erp',
+  'consultant sap',
+  'consultant oracle',
+  'maîtrise d\'ouvrage',
+  'moa',
+  'amoa',
+  'cobol',
+  'as400',
+  'ibmi',
+] as const;
+
 // --- Rate limits ---
 
 export const RATE_LIMITS = {
@@ -75,7 +103,7 @@ export const RATE_LIMITS = {
   REQUEST_TIMEOUT: 30_000,
   MAX_RESULTS_PER_SCRAPER: 200,
   /** Stop scraping once this many NEW (non-duplicate) offers are found per scraper. */
-  MAX_NEW_RESULTS: parseInt(process.env.AUTOAPPLY_MAX_NEW_RESULTS || '3', 10),
+  MAX_NEW_RESULTS: parseInt(process.env.AUTOAPPLY_MAX_NEW_RESULTS || '100', 10),
 } as const;
 
 // --- BOAMP API ---

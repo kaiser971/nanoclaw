@@ -85,11 +85,19 @@ Les CV passent souvent par un ATS (Applicant Tracking System). Optimiser :
 
 ### 5. Génération du fichier
 
+**Nom du fichier : `CV_{ACHETEUR}.docx`**
+
+Extraire le nom de l'acheteur depuis `description.md` (champ `| **Acheteur** | ... |`).
+Sanitizer pour le nom de fichier : espaces → `_`, garder uniquement `[A-Za-z0-9_\-]`.
+Si l'acheteur est `—` ou vide → utiliser `CV.docx` comme fallback.
+
+Exemples : `1G-LINK CONSULTING` → `CV_1G-LINK_CONSULTING.docx` | `Ministère de l'Intérieur` → `CV_Ministere_de_lInterieur.docx`
+
 **OBLIGATOIRE — Suivre ces 2 étapes EXACTEMENT dans cet ordre :**
 
 **Étape A** — Copier l'original (OBLIGATOIRE, ne jamais sauter cette étape) :
 ```bash
-cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{platform}/{slug}/CV.docx
+cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx
 ```
 
 **Étape B** — Modifier UNIQUEMENT le texte de la copie avec python-docx :
@@ -97,7 +105,7 @@ cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{p
 python3 << 'PYSCRIPT'
 from docx import Document
 
-cv_path = "/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx"
+cv_path = "/workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx"
 doc = Document(cv_path)
 
 # Parcourir les cellules des tableaux existants
@@ -122,9 +130,38 @@ PYSCRIPT
 
 **Le fichier de sortie DOIT être visuellement identique à l'original** (même mise en page, polices, couleurs, marges). Seul le contenu textuel change.
 
-Chemin de sortie : `/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx`
+Chemin de sortie : `/workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx`
 
-### 6. Notes d'adaptation
+### 6. Message de réponse
+
+Après avoir généré le CV, **ajouter une section "Message de réponse"** à la fin du `description.md` de l'offre.
+
+Ce message est la prise de contact initiale (email, formulaire, message direct) que Jean-Luc enverra au recruteur. Il doit :
+
+- Être **strictement inférieur à 2000 caractères** (espaces compris)
+- Être **personnalisé** : utiliser le nom de l'acheteur/entreprise si disponible, mentionner 2-3 éléments spécifiques de l'offre
+- Mettre en avant **les points forts du profil qui matchent cette offre précisément**
+- Mentionner la disponibilité et le TJM si pertinent
+- Ton professionnel, direct, sans formules creuses
+- **Ne jamais citer mot pour mot l'intitulé du poste** — utiliser des formulations naturelles comme "le poste de...", "l'offre de...", "la mission de...", "votre offre", "cette mission". Écrire comme un professionnel qui répond spontanément, pas comme un système automatisé.
+
+Ajoute la section en fin de `description.md` :
+
+```bash
+cat >> /workspace/extra/freelance-radar/{platform}/{slug}/description.md << 'MSGEOF'
+
+## Message de réponse
+
+{message généré ici}
+
+---
+*Généré automatiquement — à relire avant envoi.*
+MSGEOF
+```
+
+**Contrainte stricte** : compter les caractères avant d'écrire. Si le message dépasse 2000 caractères, le raccourcir en conservant l'essentiel.
+
+### 7. Notes d'adaptation
 
 Pour chaque CV généré, produire un résumé :
 

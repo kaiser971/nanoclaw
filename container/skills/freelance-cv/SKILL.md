@@ -30,28 +30,63 @@ Quand tu es déclenché après le scraping, tu traites TOUTES les offres en atte
 /workspace/project/data/freelance/profile.json   — Profil professionnel (read-only)
 /workspace/project/data/freelance/CV.docx        — CV source original (read-only)
 /workspace/extra/freelance-radar/                — Repo des offres (read-write)
-  {platform}/{slug}/
-    description.md   — Détails de l'offre (créé par le host)
-    context.md       — Contexte pour le traitement (status: pending/processed)
-    CV.docx          — CV adapté (créé par resume-optimizer)
+  {platform}/
+    {slug}/              — Offre active
+      description.md     — Détails de l'offre (créé par le host)
+      context.md         — Contexte pour le traitement (status: pending/processed)
+      CV.docx            — CV adapté (créé par resume-optimizer)
+      CV.pdf             — PDF du CV adapté
+  applied/
+    {platform}/
+      {slug}/            — Offre pour laquelle une candidature a été envoyée
+  archived/
+    {platform}/
+      {slug}/            — Offre expirée (publiée > 6 mois) ou abandonnée
 ```
 
-## Étape 1 — Trouver toutes les offres en attente
+Les dossiers `applied/` et `archived/` sont à la racine du repo et ne sont **jamais scannés** par le pipeline.
+
+## Étape 1 — Construire la liste de travail
+
+Deux modes selon le déclenchement :
+
+### Mode normal (post-scraping automatique)
+
+Les chemins des nouvelles offres sont fournis directement par le scraper dans le payload IPC. Écris-les dans `/tmp/work_list.txt` sans scanner le repo.
+
+### Mode scan complet (recovery)
+
+Déclenché si l'utilisateur dit : "scan complet", "récupère les offres en attente", "rattrapage", "check les pending", ou équivalent.
+
+Scanne l'intégralité du repo pour trouver **tous** les `status: pending` (ajouts manuels, offres ratées suite à un rate limit ou arrêt du process), en excluant explicitement `applied/` et `archived/` :
 
 ```bash
-find /workspace/extra/freelance-radar -name context.md -exec grep -l "status: pending" {} +
+grep -rl "status: pending" /workspace/extra/freelance-radar/*/*/context.md \
+  | grep -v '^/workspace/extra/freelance-radar/applied/' \
+  | grep -v '^/workspace/extra/freelance-radar/archived/' \
+  | sed 's|/context.md||' \
+  | sort > /tmp/work_list.txt
 ```
 
-Compte le nombre total (N) pour le suivi de progression.
+---
 
-Si aucune offre en attente, envoie via MCP :
+Compte le nombre de lignes (N) :
+
+```bash
+N=$(wc -l < /tmp/work_list.txt)
+echo "Offres à traiter : $N"
+```
+
+Si N=0, envoie via MCP :
 > "Aucune nouvelle offre en attente de traitement."
 
-Et arrête-toi.
+Supprime `/tmp/work_list.txt` et arrête-toi.
 
 ## Étape 2 — Boucle de traitement
 
-Pour CHAQUE offre pending (index i de 1 à N) :
+**Input exclusif : `/tmp/work_list.txt`** — ne pas rescanner le repo.
+
+Pour CHAQUE chemin dans `/tmp/work_list.txt` (index i de 1 à N) :
 
 ### 2a. Progression
 
@@ -84,19 +119,15 @@ Détermine :
 
 **Délègue au skill `resume-optimizer`** en lui fournissant :
 - Le chemin du context.md (contient l'offre et le scoring)
-- Le chemin de destination du CV : `/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx`
+- Le chemin de destination du CV : `/workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx` (le nom exact est déterminé par resume-optimizer à partir du champ Acheteur de description.md)
 
 Le skill `resume-optimizer` s'occupe de copier le CV original, l'adapter et le sauvegarder.
 
-### 2d-bis. Générer le PDF
-
-Après génération du CV.docx, **toujours** produire une copie PDF :
+**Ajoute le chemin du dossier à la liste de session** (pour la génération PDF en batch) :
 
 ```bash
-libreoffice --headless --convert-to pdf --outdir /workspace/extra/freelance-radar/{platform}/{slug}/ /workspace/extra/freelance-radar/{platform}/{slug}/CV.docx
+echo "/workspace/extra/freelance-radar/{platform}/{slug}" >> /tmp/cv_session_paths.txt
 ```
-
-Le dossier de chaque offre retenue doit contenir **CV.docx ET CV.pdf**.
 
 ### 2e. Mettre à jour le context.md
 
@@ -130,7 +161,31 @@ cvGenerated: {true|false}
 {ce qui a été modifié dans le CV et pourquoi — rempli par resume-optimizer}
 ```
 
-## Étape 3 — Nettoyage du repo
+## Étape 3 — Génération PDF en batch
+
+Après avoir traité **toutes** les offres de la session, génère les PDFs en une seule passe pour les CVs créés durant cette session uniquement (pas les CVs déjà présents dans le repo d'une session précédente).
+
+La génération PDF s'effectue **côté host** via une tâche IPC (le container agent n'a pas accès à Docker).
+
+Écris le fichier IPC suivant pour déclencher la génération :
+
+```bash
+cat > /workspace/ipc/tasks/generate_pdfs_$(date +%s).json << 'EOF'
+{
+  "type": "run_host_task",
+  "taskId": "autoapply_generate_pdfs"
+}
+EOF
+```
+
+Le host détecte automatiquement tous les `CV.docx` sans `CV.pdf` correspondant dans `freelance-radar/` (hors `applied/` et `archived/`) et génère les PDFs via le container `docx2pdf`.
+
+# Nettoyage des fichiers temporaires de session
+```bash
+rm -f /tmp/cv_session_paths.txt /tmp/work_list.txt
+```
+
+## Étape 5 — Nettoyage du repo
 
 Le repo freelance-radar ne doit contenir **QUE les offres pour lesquelles un CV a été généré**.
 
@@ -151,7 +206,7 @@ git add -A
 git commit -m "feat: nouvelles offres — $(date +%Y-%m-%d)" || true
 ```
 
-## Étape 4 — Digest final
+## Étape 6 — Digest final
 
 Après le nettoyage et le commit, envoie via `mcp__nanoclaw__send_message` :
 
@@ -175,6 +230,77 @@ Après le nettoyage et le commit, envoie via `mcp__nanoclaw__send_message` :
 ✅ Traitement terminé — plus aucune tâche en cours.
 ```
 
+## Archivage des offres
+
+### Déclenchement
+
+Déclenché si l'utilisateur dit : "j'ai postulé", "archive les expirées", "marque comme postulé {slug}", "nettoie les vieilles offres", ou équivalent.
+
+### Candidature envoyée (manuel ou sur demande)
+
+Déplace le dossier de l'offre dans `applied/{platform}/` à la racine du repo :
+
+```bash
+mkdir -p /workspace/extra/freelance-radar/applied/{platform}/
+mv /workspace/extra/freelance-radar/{platform}/{slug}/ \
+   /workspace/extra/freelance-radar/applied/{platform}/{slug}/
+```
+
+### Archivage automatique des offres expirées
+
+Une offre est expirée si : **date de publication + 6 mois < aujourd'hui**.
+
+La date de publication est dans `description.md`, champ `**Publiée**` :
+
+```bash
+python3 << 'EOF'
+import re, shutil
+from datetime import datetime, timedelta
+from pathlib import Path
+
+radar = Path("/workspace/extra/freelance-radar")
+today = datetime.today()
+threshold = timedelta(days=183)  # ~6 mois
+archived = []
+
+# Ne scanner que {platform}/{slug}/ — exclure applied/ et archived/
+excluded = {"applied", "archived"}
+
+for context in radar.glob("*/*/context.md"):
+    platform = context.parts[-3]
+    slug = context.parts[-2]
+    if platform in excluded:
+        continue
+
+    desc = context.parent / "description.md"
+    if not desc.exists():
+        continue
+
+    match = re.search(r'\|\s*\*\*Publiée\*\*\s*\|\s*(\d{4}-\d{2}-\d{2})', desc.read_text())
+    if not match:
+        continue
+
+    pub_date = datetime.strptime(match.group(1), "%Y-%m-%d")
+    if today - pub_date > threshold:
+        dest = radar / "archived" / platform / slug
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(context.parent), str(dest))
+        archived.append(f"{platform}/{slug}")
+
+print(f"Archivées : {len(archived)}")
+for a in archived:
+    print(f"  {a}")
+EOF
+```
+
+Après déplacement, commit :
+
+```bash
+cd /workspace/extra/freelance-radar
+git add -A
+git commit -m "chore: archive offres expirées / postulées — $(date +%Y-%m-%d)" || true
+```
+
 ## Règles
 
 - **TOUJOURS traiter TOUTES les offres pending** — ne jamais s'arrêter après une seule
@@ -182,4 +308,5 @@ Après le nettoyage et le commit, envoie via `mcp__nanoclaw__send_message` :
 - **Déléguer la génération CV** au skill resume-optimizer
 - **Ne pas postuler** automatiquement — l'utilisateur valide
 - **Supprimer du repo** les offres "skip" — seules les offres avec CV restent
-- **Git commit** après le nettoyage — les offres s'accumulent entre les runs
+- **Ne jamais scanner** `applied/` et `archived/` — ces dossiers sont hors scope
+- **Git commit** après le nettoyage ou l'archivage — les offres s'accumulent entre les runs

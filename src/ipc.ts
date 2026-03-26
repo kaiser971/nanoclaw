@@ -435,6 +435,11 @@ export async function processTaskIpc(
             'Host task completed via IPC',
           );
 
+          // Resolve chatJid for this group (needed for all notifications)
+          const chatJid = Object.entries(deps.registeredGroups()).find(
+            ([, g]) => g.folder === sourceGroup,
+          )?.[0];
+
           // Trigger follow-up container for Tier 2 scoring + CV generation
           if (triggerContainer) {
             logger.info(
@@ -444,9 +449,6 @@ export async function processTaskIpc(
               },
               '[AUTOAPPLY] Preparing follow-up container',
             );
-            const chatJid = Object.entries(deps.registeredGroups()).find(
-              ([, g]) => g.folder === sourceGroup,
-            )?.[0];
             if (chatJid) {
               // Send quick digest first
               const { buildDigest } =
@@ -491,6 +493,18 @@ export async function processTaskIpc(
               { taskId: data.taskId },
               '[AUTOAPPLY] No pertinent offers, skipping container',
             );
+            // Notify user even when no pertinent offers found
+            if (chatJid) {
+              const date = new Date().toLocaleDateString('fr-FR', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+              });
+              await deps.sendMessage(
+                chatJid,
+                `📋 *Scraping du ${date}*\n\n${result}\n\nAucune nouvelle offre pertinente trouvée.`,
+              );
+            }
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);

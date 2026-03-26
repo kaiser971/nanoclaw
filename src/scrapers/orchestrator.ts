@@ -3,7 +3,7 @@
  * Designed to run host-side (no container needed).
  */
 
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -457,6 +457,148 @@ Repo offres : /workspace/extra/freelance-radar/
 Utilise les skills freelance-cv et resume-optimizer.`,
               }
             : undefined,
+      };
+    });
+
+    registerHostTask('autoapply_generate_pdfs', async () => {
+      // Find all CV.docx without a corresponding CV.pdf in freelance-radar
+      // (excludes applied/ and archived/)
+      const generated: string[] = [];
+      const failed: string[] = [];
+
+      function findMissingPdfs(dir: string): Array<{ offerDir: string; docxFile: string }> {
+        const missing: Array<{ offerDir: string; docxFile: string }> = [];
+        if (!fs.existsSync(dir)) return missing;
+
+        for (const platform of fs.readdirSync(dir)) {
+          if (['applied', 'archived', '.git'].includes(platform)) continue;
+          const platformDir = path.join(dir, platform);
+          if (!fs.statSync(platformDir).isDirectory()) continue;
+
+          for (const slug of fs.readdirSync(platformDir)) {
+            const offerDir = path.join(platformDir, slug);
+            if (!fs.statSync(offerDir).isDirectory()) continue;
+
+            // Find any CV_*.docx (or CV.docx fallback) without a matching PDF
+            const files = fs.readdirSync(offerDir);
+            const docxFiles = files.filter(
+              (f) => (f.startsWith('CV_') || f === 'CV.docx') && f.endsWith('.docx'),
+            );
+            for (const docxFile of docxFiles) {
+              const pdfFile = docxFile.replace(/\.docx$/, '.pdf');
+              if (!files.includes(pdfFile)) {
+                missing.push({ offerDir, docxFile });
+              }
+            }
+          }
+        }
+        return missing;
+      }
+
+      const missing = findMissingPdfs(JOB_REPO_DIR);
+      logger.info({ count: missing.length }, 'PDF generation: missing PDFs found');
+
+      for (const { offerDir, docxFile } of missing) {
+        const result = spawnSync('docker', [
+          'run', '--rm',
+          '-v', `${offerDir}:/work`,
+          'docx2pdf:latest',
+          '--outdir', '/work/',
+          `/work/${docxFile}`,
+        ], { encoding: 'utf-8' });
+
+        if (result.status === 0) {
+          generated.push(`${offerDir}/${docxFile}`);
+          logger.info({ dir: offerDir, file: docxFile }, 'PDF generated');
+        } else {
+          failed.push(`${offerDir}/${docxFile}`);
+          logger.warn({ dir: offerDir, file: docxFile, stderr: result.stderr }, 'PDF generation failed');
+        }
+      }
+
+      return {
+        result: `${generated.length} PDFs générés, ${failed.length} échecs`,
+      };
+    });
+
+    registerHostTask('autoapply_generate_messages', async () => {
+      // Find all offer dirs with CV.docx but no "Message de réponse" in description.md
+      const missing: Array<{ platform: string; slug: string; dir: string }> = [];
+
+      if (!fs.existsSync(JOB_REPO_DIR)) {
+        return { result: 'Job repo not found' };
+      }
+
+      for (const platform of fs.readdirSync(JOB_REPO_DIR)) {
+        if (['applied', 'archived', '.git'].includes(platform)) continue;
+        const platformDir = path.join(JOB_REPO_DIR, platform);
+        if (!fs.statSync(platformDir).isDirectory()) continue;
+
+        for (const slug of fs.readdirSync(platformDir)) {
+          const offerDir = path.join(platformDir, slug);
+          if (!fs.statSync(offerDir).isDirectory()) continue;
+          const docx = path.join(offerDir, 'CV.docx');
+          const desc = path.join(offerDir, 'description.md');
+          if (!fs.existsSync(docx)) continue;
+          if (!fs.existsSync(desc)) continue;
+          const descContent = fs.readFileSync(desc, 'utf-8');
+          if (!descContent.includes('## Message de réponse')) {
+            missing.push({ platform, slug, dir: offerDir });
+          }
+        }
+      }
+
+      logger.info(
+        { count: missing.length },
+        'autoapply_generate_messages: offers needing response message',
+      );
+
+      if (missing.length === 0) {
+        return { result: 'Tous les CVs ont déjà un message de réponse' };
+      }
+
+      const offerList = missing
+        .map((o) => `/workspace/extra/freelance-radar/${o.platform}/${o.slug}`)
+        .join('\n');
+
+      return {
+        result: `${missing.length} offres sans message de réponse`,
+        triggerContainer: {
+          prompt: `Tu dois générer un "Message de réponse" pour ${missing.length} offres freelance qui ont un CV adapté mais pas encore de message de prise de contact.
+
+Pour CHAQUE offre dans la liste ci-dessous :
+1. Lis \`description.md\` et \`context.md\`
+2. Génère un message de réponse personnalisé < 2000 caractères (compte les caractères avant d'écrire)
+3. Appende-le à la fin de \`description.md\` via :
+   \`\`\`bash
+   cat >> /workspace/extra/freelance-radar/{platform}/{slug}/description.md << 'MSGEOF'
+
+## Message de réponse
+
+{message ici}
+
+---
+*Généré automatiquement — à relire avant envoi.*
+MSGEOF
+   \`\`\`
+4. Envoie une progression via mcp__nanoclaw__send_message : "✍️ Message généré pour {titre} ({i}/{N})"
+
+Le message doit :
+- Être < 2000 caractères (espaces compris)
+- Mentionner le nom de l'acheteur/entreprise si disponible dans description.md
+- Citer 2-3 éléments spécifiques de l'offre
+- Mettre en avant les points du profil qui matchent
+- Mentionner la disponibilité et le TJM si pertinent
+- Ton professionnel, direct, sans formules creuses
+
+Profil : /workspace/project/data/freelance/profile.json
+
+Offres à traiter (${missing.length}) :
+${offerList}
+
+Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
+"✅ Messages de réponse générés pour ${missing.length} offres. Pensez à les relire avant envoi."`,
+        },
       };
     });
 

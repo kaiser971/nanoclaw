@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { logger } from '../logger.js';
-import { SCORING_CONFIG, ALL_SEARCH_TERMS } from './config.js';
+import { SCORING_CONFIG, ALL_SEARCH_TERMS, EXCLUDED_TITLE_PATTERNS } from './config.js';
 import type { ScrapedOffer } from './types.js';
 
 /** Domain keywords that indicate an offer is in-scope for the profile. */
@@ -280,6 +280,88 @@ function scoreExperienceMatch(offer: ScrapedOffer, profile: Profile): number {
   return 0.6;
 }
 
+/** Keywords indicating the offer is remote or in the Île-de-France region. */
+const IDF_REMOTE_KEYWORDS = [
+  'remote',
+  'télétravail',
+  'teletravail',
+  'full remote',
+  'à distance',
+  'a distance',
+  'hybride',
+  'hybrid',
+  'île-de-france',
+  'ile-de-france',
+  'idf',
+  'paris',
+  'val-d\'oise',
+  'val d\'oise',
+  'yvelines',
+  'essonne',
+  'hauts-de-seine',
+  'seine-saint-denis',
+  'val-de-marne',
+  'seine-et-marne',
+  'cergy',
+  'pontoise',
+  'saint-ouen',
+  'versailles',
+  'boulogne',
+  'nanterre',
+  'vincennes',
+  'montreuil',
+  'ivry',
+  'créteil',
+  'creteil',
+  'bobigny',
+  'argenteuil',
+  'melun',
+  // Département codes
+  '75', '77', '78', '91', '92', '93', '94', '95',
+];
+
+/**
+ * Returns true if the offer location is explicitly set and contains no
+ * IDF or remote keywords → hard-reject (not in scope).
+ * If location is absent or empty, returns false (neutral → don't reject).
+ */
+function isLocationExcluded(location: string | undefined): boolean {
+  if (!location || location.trim() === '' || location === '—') return false;
+
+  const loc = location.toLowerCase();
+  for (const kw of IDF_REMOTE_KEYWORDS) {
+    if (loc.includes(kw)) return false;
+  }
+
+  // Location is set but matches no IDF/remote keyword → out of scope
+  return true;
+}
+
+/**
+ * Hard-reject an offer before scoring if its title matches any
+ * EXCLUDED_TITLE_PATTERNS, if any excluded skill appears in the title,
+ * or if the location is explicitly outside IDF/remote.
+ * Returns true → score 0, offer filtered out.
+ */
+function isHardExcluded(offer: ScrapedOffer, excludedSkills: Set<string>): boolean {
+  const title = offer.title.toLowerCase();
+
+  for (const pattern of EXCLUDED_TITLE_PATTERNS) {
+    if (title.includes(pattern)) return true;
+  }
+
+  for (const skill of excludedSkills) {
+    if (title.includes(skill)) return true;
+  }
+
+  if (isLocationExcluded(offer.location)) {
+    logger.debug({ title: offer.title, location: offer.location }, 'Offer hard-rejected by location');
+    return true;
+  }
+
+  return false;
+}
+
 // --- Main scoring function ---
 
 export interface ScoringResult {
@@ -301,6 +383,21 @@ export function scoreOffer(
   const p = profile || loadProfile();
   const profileAliases = buildAliasSet(p.skills);
   const excludedSkills = new Set(p.excludedSkills.map((s) => s.toLowerCase()));
+
+  if (isHardExcluded(offer, excludedSkills)) {
+    logger.debug({ title: offer.title }, 'Offer hard-rejected by title pattern');
+    return {
+      score: 0,
+      breakdown: {
+        skillMatch: 0,
+        domainRelevance: 0,
+        experienceMatch: 0,
+        locationMatch: 0,
+        tjmMatch: 0,
+        freshnessBonus: 0,
+      },
+    };
+  }
 
   const weights = SCORING_CONFIG.TIER1_WEIGHTS;
 

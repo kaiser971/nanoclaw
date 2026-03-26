@@ -1,217 +1,332 @@
 {
   "name": "SALLARSAIB Jean-Luc",
-  "title": "Développeur Full Stack / Tech Lead",
+  "title": "Chef de Projet / Tech Lead PHP",
+  "bio": "Chef de projet expérimenté et lead dev passionné avec plus de 10 ans d'expérience dans la gestion de projets agiles et le développement PHP. Compétences solides en gestion d'équipe, optimisation des performances, et mise en place de solutions techniques innovantes.",
   "experienceYears": 13,
   "location": {
     "city": "Saint-Ouen-l'Aumône",
     "department": "Val-d'Oise",
     "region": "Île-de-France"
   },
+  "contact": {
+    "email": "sallarsaib.jluc@gmail.com",
+    "phone": "+33 7 83 18 20 22"
+  },
   "skills": [
     {
       "name": "PHP",
       "level": "expert",
       "years": 13,
-      "aliases": ["php8", "php 8"],
-      "frameworks": ["Symfony", "Laminas", "CodeIgniter", "Yii", "FMUP"],
+      "aliases": ["php8", "php 8", "php7", "php5"],
+      "frameworks": ["Symfony", "CodeIgniter", "Yii", "Laminas", "FMUP", "PyroCMS"],
       "tools": ["Composer", "PHPUnit", "Behat", "PHPStan"]
-    },
-    {
-      "name": "Python",
-      "level": "confirmé",
-      "years": 2,
-      "aliases": ["python3"],
-      "frameworks": [],
-      "tools": []
     },
     {
       "name": "Symfony",
       "level": "expert",
       "years": 10,
-      "aliases": ["symfony 4", "symfony 5", "symfony 6", "symfony 7", "sf"],
-      "frameworks": [],
+      "aliases": ["symfony4", "symfony5", "symfony6", "symfony 4", "symfony 5", "symfony 6", "symfony 7", "sf"],
       "tools": ["API Platform"]
+    },
+    {
+      "name": "SQL",
+      "level": "advanced",
+      "years": 13,
+      "aliases": ["MySQL", "PostgreSQL"]
+    },
+    {
+      "name": "MySQL",
+      "level": "advanced",
+      "years": 10,
+      "aliases": ["mariadb"]
+    },
+    {
+      "name": "PostgreSQL",
+      "level": "advanced",
+      "years": 4,
+      "aliases": ["postgres"]
+    },
+    {
+      "name": "Docker",
+      "level": "advanced",
+      "years": 5,
+      "aliases": ["container", "containerisation", "docker compose", "docker-compose", "conteneurs"],
+      "tools": ["Vagrant"]
     },
     {
       "name": "API REST",
       "level": "expert",
       "years": 10,
-      "aliases": ["rest", "api rest", "restful", "api", "api restful"],
-      "frameworks": [],
+      "aliases": ["REST", "RESTful", "API", "web services", "SOAP", "rest", "api rest", "restful", "api restful"],
       "tools": ["Swagger", "OpenAPI"]
     },
     {
       "name": "GraphQL",
-      "level": "confirmé",
+      "level": "advanced",
       "years": 3,
-      "aliases": [],
-      "frameworks": [],
-      "tools": []
-    },
-    {
-      "name": "Docker",
-      "level": "confirmé",
-      "years": 5,
-      "aliases": ["docker compose", "docker-compose", "conteneurs"],
-      "frameworks": [],
-      "tools": ["Vagrant"]
-    },
-    {
-      "name": "Kubernetes",
-      "level": "intermédiaire",
-      "years": 2,
-      "aliases": ["k8s"],
-      "frameworks": [],
-      "tools": []
+      "aliases": []
     },
     {
       "name": "CI/CD",
-      "level": "confirmé",
-      "years": 5,
+      "level": "advanced",
+      "years": 6,
       "aliases": ["intégration continue", "déploiement continu", "pipeline"],
-      "frameworks": [],
-      "tools": ["GitLab CI", "Jenkins", "GitHub Actions", "Travis CI"]
+      "tools": ["Jenkins", "GitLab CI", "Travis CI", "GitHub Actions"]
     },
     {
       "name": "DDD",
-      "level": "confirmé",
+      "level": "advanced",
       "years": 5,
-      "aliases": ["domain driven design", "domain-driven design", "architecture hexagonale", "clean architecture"],
-      "frameworks": [],
-      "tools": []
+      "aliases": [
+        "domain driven design",
+        "domain-driven design",
+        "architecture hexagonale",
+        "clean architecture"
+      ]
     },
     {
       "name": "Git",
       "level": "expert",
       "years": 12,
-      "aliases": ["gitflow", "gitlab", "github"],
-      "frameworks": [],
-      "tools": []
+      "aliases": ["versioning", "gitflow", "gitlab", "github"]
     },
     {
-      "name": "MySQL",
-      "level": "confirmé",
-      "years": 10,
-      "aliases": ["mariadb"],
-      "frameworks": [],
-      "tools": []
-    },
-    {
-      "name": "PostgreSQL",
-      "level": "confirmé",
-      "years": 4,
-      "aliases": ["postgres"],
-      "frameworks": [],
-      "tools": []
-    },
-    {
-      "name": "MongoDB",
-      "level": "intermédiaire",
-      "years": 2,
-      "aliases": ["mongo"],
-      "frameworks": [],
-      "tools": []
-    },
-    {
-      "name": "ElasticSearch",
-      "level": "intermédiaire",
-      "years": 2,
-      "aliases": ["elasticsearch", "elastic"],
-      "frameworks": [],
-      "tools": []
-    },
-    {
-      "name": "RabbitMQ",
-      "level": "confirmé",
-      "years": 3,
-      "aliases": ["rabbitmq", "message queue", "amqp"],
-      "frameworks": [],
-      "tools": []
-    },
-    {
-      "name": "IA",
-      "level": "intermédiaire",
-      "years": 1,
-      "aliases": ["intelligence artificielle", "llm", "rag", "prompt engineering", "machine learning"],
-      "frameworks": [],
-      "tools": []
+      "name": "Gestion de projet",
+      "level": "expert",
+      "years": 8,
+      "aliases": ["chef de projet", "pilotage", "coordination", "project management"]
     },
     {
       "name": "Agile",
-      "level": "confirmé",
+      "level": "expert",
       "years": 8,
-      "aliases": ["scrum", "kanban", "sprint", "daily", "planning poker"],
-      "frameworks": [],
+      "aliases": ["scrum", "kanban", "sprint", "daily meeting", "poker planning", "daily", "planning poker"],
       "tools": ["JIRA"]
     },
     {
-      "name": "WordPress",
-      "level": "intermédiaire",
-      "years": 3,
-      "aliases": ["prestashop", "joomla"],
-      "frameworks": [],
-      "tools": []
+      "name": "Kubernetes",
+      "level": "intermediate",
+      "years": 2,
+      "aliases": ["k8s"]
     },
     {
-      "name": "Laravel",
-      "level": "intermédiaire",
+      "name": "ElasticSearch",
+      "level": "intermediate",
+      "years": 2,
+      "aliases": ["elasticsearch", "elastic"]
+    },
+    {
+      "name": "MongoDB",
+      "level": "intermediate",
+      "years": 2,
+      "aliases": ["mongo", "nosql"]
+    },
+    {
+      "name": "RabbitMQ",
+      "level": "advanced",
+      "years": 3,
+      "aliases": ["rabbitmq", "message queue", "amqp"]
+    },
+    {
+      "name": "IA",
+      "level": "intermediate",
       "years": 1,
-      "aliases": [],
-      "frameworks": [],
-      "tools": []
+      "aliases": [
+        "intelligence artificielle",
+        "llm",
+        "rag",
+        "prompt engineering",
+        "machine learning"
+      ]
     },
     {
       "name": "JavaScript",
-      "level": "intermédiaire",
+      "level": "intermediate",
       "years": 5,
       "aliases": ["js", "javascript", "node.js", "nodejs"],
-      "frameworks": ["Vue.js", "React"],
-      "tools": []
+      "frameworks": ["Vue.js", "React"]
+    },
+    {
+      "name": "Laravel",
+      "level": "intermediate",
+      "years": 2,
+      "aliases": ["laravel 10", "laravel 9"]
+    },
+    {
+      "name": "Python",
+      "level": "intermediate",
+      "years": 3,
+      "aliases": ["python3"]
+    },
+    {
+      "name": "OAuth2",
+      "level": "advanced",
+      "years": 3,
+      "aliases": ["oauth", "authentification", "SSO"]
+    },
+    {
+      "name": "Tests",
+      "level": "advanced",
+      "years": 6,
+      "aliases": ["tests unitaires", "tests fonctionnels", "TDD"],
+      "tools": ["PHPUnit", "Behat", "Selenium"]
+    },
+    {
+      "name": "CMS",
+      "level": "advanced",
+      "years": 5,
+      "aliases": ["prestashop", "joomla"],
+      "tools": ["WordPress"]
+    },
+    {
+      "name": "Oracle",
+      "level": "intermediate",
+      "years": 2,
+      "aliases": ["Oracle DB"]
     }
   ],
   "excludedSkills": [
-    "SAP",
-    "SAP FICO",
-    "SAP PP",
-    "SAP S/4HANA",
-    "Oracle",
-    "Oracle forms",
-    "PL/SQL",
-    "Salesforce",
-    "Dynamics",
-    "COBOL",
-    "RPG",
-    "4D",
-    "Adelia",
-    "Planisware",
-    "HR Access",
-    "ServiceNow",
-    "ABAP",
-    "Mainframe",
-    "AS400",
-    "IBMi"
+    "SAP", "SAP FICO", "SAP PP", "SAP S/4HANA",
+    "ABAP", "COBOL", "Mainframe", "RPG",
+    "Salesforce", "ServiceNow",
+    "SharePoint", "Dynamics",
+    "Java", "Spring",
+    "Scala", "Hadoop",
+    "Delphi", "VB.NET",
+    "4D", "Adelia", "Planisware", "HR Access",
+    "AS400", "IBMi",
+    "Oracle forms", "PL/SQL"
   ],
-  "preferredLocations": [
-    "Paris",
-    "Saint-Ouen-l'Aumône",
-    "Cergy",
-    "Pontoise",
-    "Île-de-France"
-  ],
-  "preferredRegions": [
-    "Île-de-France",
-    "Val-d'Oise"
-  ],
+  "preferredLocations": ["Paris", "Remote", "Saint-Ouen-l'Aumône", "Cergy", "Pontoise", "Île-de-France"],
+  "preferredRegions": ["Île-de-France", "Val-d'Oise"],
   "acceptsRemote": true,
   "acceptsOnsite": true,
   "prefersHybrid": true,
   "tjm": {
     "minimum": 450,
-    "target": 550,
+    "target": 600,
     "currency": "EUR"
   },
   "preferredDuration": {
     "minMonths": 3,
     "maxMonths": 36
+  },
+  "preferredOfferTypes": ["freelance", "appel-offre"],
+  "languages": [
+    { "name": "Français", "level": "native" },
+    { "name": "Anglais", "level": "professional", "certification": "TOEIC 800" }
+  ],
+  "education": [
+    { "degree": "Master of Science", "school": "Supinfo Guadeloupe", "year": 2011 },
+    { "degree": "Licence MI", "school": "U.A.G Fouillole", "year": 2007 },
+    { "degree": "D.U.T Informatique et Gestion", "school": "I.U.T Lens", "year": 2005 }
+  ],
+  "experience": [
+    {
+      "company": "OUIDOU Consulting",
+      "location": "Paris",
+      "role": "Chef de projet / Lead Dev",
+      "startDate": "2023-08",
+      "endDate": null,
+      "highlights": [
+        "Pilotage de projets de développement",
+        "Rédaction spécifications fonctionnelles et techniques",
+        "Mise en place pipelines CI/CD",
+        "Coordination d'équipe, suivi charges et délais"
+      ]
+    },
+    {
+      "company": "IDGarages",
+      "location": "Arcueil",
+      "role": "Développeur Back-end",
+      "startDate": "2021-03",
+      "endDate": "2023-08",
+      "highlights": [
+        "API REST Symfony, migration v4 → v6",
+        "Système de réservation + workers email",
+        "Bundle Zend/Symfony OAuth2",
+        "ElasticSearch, MongoDB, RabbitMQ, Kubernetes"
+      ]
+    },
+    {
+      "company": "TEEPS",
+      "location": "Paris",
+      "role": "Lead Dev Back-end",
+      "startDate": "2019-06",
+      "endDate": "2021-03",
+      "highlights": [
+        "Mise en place SaaS",
+        "Intégration API Facebook et Google Analytics",
+        "Tests unitaires/fonctionnels, code coverage, code sniffer",
+        "Gitflow, Swagger/OpenAPI, Platform.sh"
+      ]
+    },
+    {
+      "company": "Fashion Network",
+      "location": "Paris",
+      "role": "Ingénieur développement PHP",
+      "startDate": "2018-04",
+      "endDate": "2019-06",
+      "highlights": [
+        "Refonte du SI existant",
+        "Maintenance applicative",
+        "Gestion d'équipe"
+      ]
+    },
+    {
+      "company": "Castelis",
+      "location": "Ivry-sur-Seine",
+      "role": "Assistant Chef de projet / Dev",
+      "startDate": "2015-10",
+      "endDate": "2018-04",
+      "highlights": [
+        "Développement PHP/Framework propriétaire (FMUP + composants Symfony)",
+        "Gestion d'équipe et soutien fonctionnel",
+        "Gestion de projet Agile (Poker Planning, Daily, Sprint Review)"
+      ]
+    },
+    {
+      "company": "Twenga",
+      "location": "Paris",
+      "role": "Développeur Sénior PHP",
+      "startDate": "2015-05",
+      "endDate": "2015-07",
+      "highlights": [
+        "Application back/front office",
+        "API REST/SOAP",
+        "Documentation technique"
+      ]
+    },
+    {
+      "company": "Novatec",
+      "location": "Jarry / Nanterre",
+      "role": "Analyste Développeur",
+      "startDate": "2013-08",
+      "endDate": "2015-05",
+      "highlights": [
+        "Plateforme de paiement en ligne",
+        "Solutions TPE, back-office client",
+        "Interfaces éditeurs (SOPRA, ANOVA, EGEE)",
+        "Administration serveurs et BDD"
+      ]
+    },
+    {
+      "company": "Noviris",
+      "location": "Paris",
+      "role": "Lead Développeur",
+      "startDate": "2012-07",
+      "endDate": "2013-08",
+      "highlights": [
+        "Application back/front office",
+        "API, documentation technique"
+      ]
+    }
+  ],
+  "notifications": {
+    "digestEnabled": true,
+    "digestMaxOffers": 5,
+    "deadlineAlertDays": [3, 1],
+    "minScoreForNotification": 0.6,
+    "quietHours": { "start": "23:00", "end": "07:00" }
   }
 }
