@@ -6,8 +6,11 @@ dist/
 
 # Local data & auth
 store/
-data/
+data/*
 !data/freelance/
+data/freelance/*
+!data/freelance/profile.json
+!data/freelance/CV.docx
 logs/
 
 # Groups - only track base structure and specific CLAUDE.md files
