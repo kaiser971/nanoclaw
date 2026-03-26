@@ -96,9 +96,7 @@ function extractNuxtJobs(html: string): NuxtJob[] {
   const fetchEntries = (nuxtData as Record<string, unknown>).fetch;
   if (!fetchEntries || typeof fetchEntries !== 'object') return [];
 
-  for (const entry of Object.values(
-    fetchEntries as Record<string, unknown>,
-  )) {
+  for (const entry of Object.values(fetchEntries as Record<string, unknown>)) {
     if (
       entry &&
       typeof entry === 'object' &&
@@ -119,9 +117,7 @@ function nuxtJobToOffer(job: NuxtJob): ScrapedOffer {
 
   const location = job.location?.shortLabel || job.location?.label || undefined;
 
-  const skills = (job.skills || [])
-    .map((s) => s.name)
-    .filter(Boolean);
+  const skills = (job.skills || []).map((s) => s.name).filter(Boolean);
 
   return {
     platform: 'free-work',
@@ -151,9 +147,7 @@ function nuxtJobToOffer(job: NuxtJob): ScrapedOffer {
  */
 function hasNextPage(html: string): boolean {
   const $ = cheerio.load(html);
-  return (
-    $('a[rel="next"], [class*="next"], [aria-label="Next"]').length > 0
-  );
+  return $('a[rel="next"], [class*="next"], [aria-label="Next"]').length > 0;
 }
 
 export const freeWorkScraper: Scraper = {
@@ -182,7 +176,8 @@ export const freeWorkScraper: Scraper = {
 
           for (const job of jobs) {
             // Only keep offers located in France
-            const country = job.location?.countryCode || job.location?.country || '';
+            const country =
+              job.location?.countryCode || job.location?.country || '';
             if (country && country !== 'FR' && country !== 'France') continue;
 
             const offer = nuxtJobToOffer(job);

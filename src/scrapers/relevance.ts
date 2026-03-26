@@ -7,7 +7,11 @@ import fs from 'fs';
 import path from 'path';
 
 import { logger } from '../logger.js';
-import { SCORING_CONFIG, ALL_SEARCH_TERMS, EXCLUDED_TITLE_PATTERNS } from './config.js';
+import {
+  SCORING_CONFIG,
+  ALL_SEARCH_TERMS,
+  EXCLUDED_TITLE_PATTERNS,
+} from './config.js';
 import type { ScrapedOffer } from './types.js';
 
 /** Domain keywords that indicate an offer is in-scope for the profile. */
@@ -294,8 +298,8 @@ const IDF_REMOTE_KEYWORDS = [
   'ile-de-france',
   'idf',
   'paris',
-  'val-d\'oise',
-  'val d\'oise',
+  "val-d'oise",
+  "val d'oise",
   'yvelines',
   'essonne',
   'hauts-de-seine',
@@ -317,7 +321,14 @@ const IDF_REMOTE_KEYWORDS = [
   'argenteuil',
   'melun',
   // Département codes
-  '75', '77', '78', '91', '92', '93', '94', '95',
+  '75',
+  '77',
+  '78',
+  '91',
+  '92',
+  '93',
+  '94',
+  '95',
 ];
 
 /**
@@ -343,7 +354,10 @@ function isLocationExcluded(location: string | undefined): boolean {
  * or if the location is explicitly outside IDF/remote.
  * Returns true → score 0, offer filtered out.
  */
-function isHardExcluded(offer: ScrapedOffer, excludedSkills: Set<string>): boolean {
+function isHardExcluded(
+  offer: ScrapedOffer,
+  excludedSkills: Set<string>,
+): boolean {
   const title = offer.title.toLowerCase();
 
   for (const pattern of EXCLUDED_TITLE_PATTERNS) {
@@ -355,7 +369,10 @@ function isHardExcluded(offer: ScrapedOffer, excludedSkills: Set<string>): boole
   }
 
   if (isLocationExcluded(offer.location)) {
-    logger.debug({ title: offer.title, location: offer.location }, 'Offer hard-rejected by location');
+    logger.debug(
+      { title: offer.title, location: offer.location },
+      'Offer hard-rejected by location',
+    );
     return true;
   }
 
@@ -385,7 +402,10 @@ export function scoreOffer(
   const excludedSkills = new Set(p.excludedSkills.map((s) => s.toLowerCase()));
 
   if (isHardExcluded(offer, excludedSkills)) {
-    logger.debug({ title: offer.title }, 'Offer hard-rejected by title pattern');
+    logger.debug(
+      { title: offer.title },
+      'Offer hard-rejected by title pattern',
+    );
     return {
       score: 0,
       breakdown: {

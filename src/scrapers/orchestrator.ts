@@ -466,7 +466,9 @@ Utilise les skills freelance-cv et resume-optimizer.`,
       const generated: string[] = [];
       const failed: string[] = [];
 
-      function findMissingPdfs(dir: string): Array<{ offerDir: string; docxFile: string }> {
+      function findMissingPdfs(
+        dir: string,
+      ): Array<{ offerDir: string; docxFile: string }> {
         const missing: Array<{ offerDir: string; docxFile: string }> = [];
         if (!fs.existsSync(dir)) return missing;
 
@@ -482,7 +484,8 @@ Utilise les skills freelance-cv et resume-optimizer.`,
             // Find any CV_*.docx (or CV.docx fallback) without a matching PDF
             const files = fs.readdirSync(offerDir);
             const docxFiles = files.filter(
-              (f) => (f.startsWith('CV_') || f === 'CV.docx') && f.endsWith('.docx'),
+              (f) =>
+                (f.startsWith('CV_') || f === 'CV.docx') && f.endsWith('.docx'),
             );
             for (const docxFile of docxFiles) {
               const pdfFile = docxFile.replace(/\.docx$/, '.pdf');
@@ -496,23 +499,36 @@ Utilise les skills freelance-cv et resume-optimizer.`,
       }
 
       const missing = findMissingPdfs(JOB_REPO_DIR);
-      logger.info({ count: missing.length }, 'PDF generation: missing PDFs found');
+      logger.info(
+        { count: missing.length },
+        'PDF generation: missing PDFs found',
+      );
 
       for (const { offerDir, docxFile } of missing) {
-        const result = spawnSync('docker', [
-          'run', '--rm',
-          '-v', `${offerDir}:/work`,
-          'docx2pdf:latest',
-          '--outdir', '/work/',
-          `/work/${docxFile}`,
-        ], { encoding: 'utf-8' });
+        const result = spawnSync(
+          'docker',
+          [
+            'run',
+            '--rm',
+            '-v',
+            `${offerDir}:/work`,
+            'docx2pdf:latest',
+            '--outdir',
+            '/work/',
+            `/work/${docxFile}`,
+          ],
+          { encoding: 'utf-8' },
+        );
 
         if (result.status === 0) {
           generated.push(`${offerDir}/${docxFile}`);
           logger.info({ dir: offerDir, file: docxFile }, 'PDF generated');
         } else {
           failed.push(`${offerDir}/${docxFile}`);
-          logger.warn({ dir: offerDir, file: docxFile, stderr: result.stderr }, 'PDF generation failed');
+          logger.warn(
+            { dir: offerDir, file: docxFile, stderr: result.stderr },
+            'PDF generation failed',
+          );
         }
       }
 
@@ -523,7 +539,8 @@ Utilise les skills freelance-cv et resume-optimizer.`,
 
     registerHostTask('autoapply_generate_messages', async () => {
       // Find all offer dirs with CV.docx but no "Message de réponse" in description.md
-      const missing: Array<{ platform: string; slug: string; dir: string }> = [];
+      const missing: Array<{ platform: string; slug: string; dir: string }> =
+        [];
 
       if (!fs.existsSync(JOB_REPO_DIR)) {
         return { result: 'Job repo not found' };

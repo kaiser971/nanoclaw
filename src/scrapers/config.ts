@@ -86,7 +86,7 @@ export const EXCLUDED_TITLE_PATTERNS = [
   'consultant erp',
   'consultant sap',
   'consultant oracle',
-  'maîtrise d\'ouvrage',
+  "maîtrise d'ouvrage",
   'moa',
   'amoa',
   'cobol',
