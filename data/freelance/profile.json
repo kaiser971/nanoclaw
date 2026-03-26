@@ -1,0 +1,217 @@
+{
+  "name": "SALLARSAIB Jean-Luc",
+  "title": "Développeur Full Stack / Tech Lead",
+  "experienceYears": 13,
+  "location": {
+    "city": "Saint-Ouen-l'Aumône",
+    "department": "Val-d'Oise",
+    "region": "Île-de-France"
+  },
+  "skills": [
+    {
+      "name": "PHP",
+      "level": "expert",
+      "years": 13,
+      "aliases": ["php8", "php 8"],
+      "frameworks": ["Symfony", "Laminas", "CodeIgniter", "Yii", "FMUP"],
+      "tools": ["Composer", "PHPUnit", "Behat", "PHPStan"]
+    },
+    {
+      "name": "Python",
+      "level": "confirmé",
+      "years": 2,
+      "aliases": ["python3"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "Symfony",
+      "level": "expert",
+      "years": 10,
+      "aliases": ["symfony 4", "symfony 5", "symfony 6", "symfony 7", "sf"],
+      "frameworks": [],
+      "tools": ["API Platform"]
+    },
+    {
+      "name": "API REST",
+      "level": "expert",
+      "years": 10,
+      "aliases": ["rest", "api rest", "restful", "api", "api restful"],
+      "frameworks": [],
+      "tools": ["Swagger", "OpenAPI"]
+    },
+    {
+      "name": "GraphQL",
+      "level": "confirmé",
+      "years": 3,
+      "aliases": [],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "Docker",
+      "level": "confirmé",
+      "years": 5,
+      "aliases": ["docker compose", "docker-compose", "conteneurs"],
+      "frameworks": [],
+      "tools": ["Vagrant"]
+    },
+    {
+      "name": "Kubernetes",
+      "level": "intermédiaire",
+      "years": 2,
+      "aliases": ["k8s"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "CI/CD",
+      "level": "confirmé",
+      "years": 5,
+      "aliases": ["intégration continue", "déploiement continu", "pipeline"],
+      "frameworks": [],
+      "tools": ["GitLab CI", "Jenkins", "GitHub Actions", "Travis CI"]
+    },
+    {
+      "name": "DDD",
+      "level": "confirmé",
+      "years": 5,
+      "aliases": ["domain driven design", "domain-driven design", "architecture hexagonale", "clean architecture"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "Git",
+      "level": "expert",
+      "years": 12,
+      "aliases": ["gitflow", "gitlab", "github"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "MySQL",
+      "level": "confirmé",
+      "years": 10,
+      "aliases": ["mariadb"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "PostgreSQL",
+      "level": "confirmé",
+      "years": 4,
+      "aliases": ["postgres"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "MongoDB",
+      "level": "intermédiaire",
+      "years": 2,
+      "aliases": ["mongo"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "ElasticSearch",
+      "level": "intermédiaire",
+      "years": 2,
+      "aliases": ["elasticsearch", "elastic"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "RabbitMQ",
+      "level": "confirmé",
+      "years": 3,
+      "aliases": ["rabbitmq", "message queue", "amqp"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "IA",
+      "level": "intermédiaire",
+      "years": 1,
+      "aliases": ["intelligence artificielle", "llm", "rag", "prompt engineering", "machine learning"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "Agile",
+      "level": "confirmé",
+      "years": 8,
+      "aliases": ["scrum", "kanban", "sprint", "daily", "planning poker"],
+      "frameworks": [],
+      "tools": ["JIRA"]
+    },
+    {
+      "name": "WordPress",
+      "level": "intermédiaire",
+      "years": 3,
+      "aliases": ["prestashop", "joomla"],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "Laravel",
+      "level": "intermédiaire",
+      "years": 1,
+      "aliases": [],
+      "frameworks": [],
+      "tools": []
+    },
+    {
+      "name": "JavaScript",
+      "level": "intermédiaire",
+      "years": 5,
+      "aliases": ["js", "javascript", "node.js", "nodejs"],
+      "frameworks": ["Vue.js", "React"],
+      "tools": []
+    }
+  ],
+  "excludedSkills": [
+    "SAP",
+    "SAP FICO",
+    "SAP PP",
+    "SAP S/4HANA",
+    "Oracle",
+    "Oracle forms",
+    "PL/SQL",
+    "Salesforce",
+    "Dynamics",
+    "COBOL",
+    "RPG",
+    "4D",
+    "Adelia",
+    "Planisware",
+    "HR Access",
+    "ServiceNow",
+    "ABAP",
+    "Mainframe",
+    "AS400",
+    "IBMi"
+  ],
+  "preferredLocations": [
+    "Paris",
+    "Saint-Ouen-l'Aumône",
+    "Cergy",
+    "Pontoise",
+    "Île-de-France"
+  ],
+  "preferredRegions": [
+    "Île-de-France",
+    "Val-d'Oise"
+  ],
+  "acceptsRemote": true,
+  "acceptsOnsite": true,
+  "prefersHybrid": true,
+  "tjm": {
+    "minimum": 450,
+    "target": 550,
+    "currency": "EUR"
+  },
+  "preferredDuration": {
+    "minMonths": 3,
+    "maxMonths": 36
+  }
+}
