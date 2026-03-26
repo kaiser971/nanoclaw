@@ -1,38 +1,53 @@
 /**
  * Free-Work scraper — French freelance job board.
- * Parses HTML SSR (Nuxt.js) with cheerio + JSON-LD extraction.
+ * Extracts job data from the Nuxt SSR hydration state (window.__NUXT__).
  */
 
 import * as cheerio from 'cheerio';
+import { runInNewContext } from 'vm';
 
 import { logger } from '../../logger.js';
 import { FREE_WORK_CONFIG, HTTP_CONFIG, RATE_LIMITS } from '../config.js';
 import type { ScrapedOffer, Scraper, ScraperRunConfig } from '../types.js';
 
-interface FreeWorkJsonLd {
-  '@type'?: string;
-  title?: string;
-  name?: string;
+/** Shape of a job object inside __NUXT__.fetch[].jobs */
+interface NuxtJob {
+  id: number;
+  title: string;
+  slug: string;
   description?: string;
-  datePosted?: string;
-  validThrough?: string;
-  hiringOrganization?: { name?: string };
-  jobLocation?: {
-    address?: { addressLocality?: string; addressRegion?: string };
+  candidateProfile?: string;
+  experienceLevel?: string;
+  minDailySalary?: number;
+  maxDailySalary?: number;
+  minAnnualSalary?: number;
+  maxAnnualSalary?: number;
+  duration?: number;
+  remoteMode?: string;
+  contracts?: string[];
+  location?: {
+    locality?: string;
+    adminLevel1?: string;
+    shortLabel?: string;
+    label?: string;
+    countryCode?: string;
+    country?: string;
   };
-  baseSalary?: {
-    value?: { minValue?: number; maxValue?: number; value?: number };
+  company?: {
+    name?: string;
   };
-  skills?: string[];
-  url?: string;
-  identifier?: { value?: string };
+  skills?: Array<{ name: string }>;
+  publishedAt?: string;
+  expiredAt?: string;
+  jobPostingType?: string;
+  job?: {
+    slug?: string;
+    nameForUserSlug?: string;
+  };
 }
 
 function buildSearchUrl(query: string, page: number): string {
-  const params = new URLSearchParams({
-    query,
-    page: String(page),
-  });
+  const params = new URLSearchParams({ query, page: String(page) });
   return `${FREE_WORK_CONFIG.BASE_URL}?${params}`;
 }
 
@@ -53,120 +68,92 @@ async function fetchHtml(url: string, timeout: number): Promise<string> {
   return resp.text();
 }
 
-function extractJsonLd(html: string): FreeWorkJsonLd[] {
+/**
+ * Extract job listings from the Nuxt SSR hydration state.
+ * The data lives in a <script> tag: window.__NUXT__ = (function(...){...})(...);
+ * Inside: __NUXT__.fetch[0].jobs (array of NuxtJob).
+ */
+function extractNuxtJobs(html: string): NuxtJob[] {
   const $ = cheerio.load(html);
-  const items: FreeWorkJsonLd[] = [];
+  let nuxtData: Record<string, unknown> | null = null;
 
-  $('script[type="application/ld+json"]').each((_, el) => {
+  $('script:not([src])').each((_: number, el: any) => {
+    const content = $(el).html() || '';
+    if (!content.includes('window.__NUXT__')) return;
+
     try {
-      const raw = $(el).html();
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-
-      // Can be a single object or an array
-      const entries = Array.isArray(parsed) ? parsed : [parsed];
-      for (const entry of entries) {
-        if (
-          entry['@type'] === 'JobPosting' ||
-          entry['@type'] === 'JobListing'
-        ) {
-          items.push(entry);
-        }
-      }
+      const sandbox = { window: {} as Record<string, unknown> };
+      runInNewContext(content, sandbox, { timeout: 5000 });
+      nuxtData = sandbox.window.__NUXT__ as Record<string, unknown>;
     } catch {
-      // Malformed JSON-LD, skip
+      // Malformed script, skip
     }
   });
 
-  return items;
-}
+  if (!nuxtData) return [];
 
-function parseJobCardsFromHtml(html: string): ScrapedOffer[] {
-  const $ = cheerio.load(html);
-  const offers: ScrapedOffer[] = [];
+  // Jobs are in fetch[0].jobs or fetch[N].jobs
+  const fetchEntries = (nuxtData as Record<string, unknown>).fetch;
+  if (!fetchEntries || typeof fetchEntries !== 'object') return [];
 
-  // Free-Work actual job URLs contain "/job-mission/"
-  // e.g. /fr/tech-it/developpeur-php/job-mission/lead-dev-symfony-42
-  $('a[href*="/job-mission/"]').each((_: number, el: any) => {
-    const $card = $(el);
-    const href = $card.attr('href') || '';
-
-    // Extract slug (and optional numeric ID) from URL
-    const slugMatch = href.match(/\/job-mission\/([\w-]+?)(?:-(\d+))?$/);
-    if (!slugMatch) return;
-
-    const slug = slugMatch[1];
-    const platformId = slugMatch[2] || slug;
-
-    // Title from .job-title inside the card
-    const title = $card.find('.job-title').first().text().trim();
-    if (!title || title.length < 3) return;
-
-    const fullUrl = `https://www.free-work.com${href}`;
-
-    // Extract tags (Freelance/CDI) from the card
-    const tags = $card
-      .find('.tag, [class*="tag"]')
-      .map((_: number, t: any) => $(t).text().trim())
-      .get();
-    const isFreelance = tags.some((t: string) => /freelance/i.test(t));
-    const isCdi = tags.some((t: string) => /cdi/i.test(t));
-
-    offers.push({
-      platform: 'free-work',
-      platformId,
-      title,
-      url: fullUrl,
-      offerType: isFreelance ? 'freelance' : isCdi ? 'cdi' : 'freelance',
-    });
-  });
-
-  return offers;
-}
-
-function jsonLdToOffer(item: FreeWorkJsonLd): ScrapedOffer | null {
-  const title = item.title || item.name;
-  if (!title) return null;
-
-  const id =
-    item.identifier?.value ||
-    item.url?.match(/(\d+)$/)?.[1] ||
-    title.replace(/\W+/g, '-').slice(0, 50);
-
-  let tjmMin: number | undefined;
-  let tjmMax: number | undefined;
-  if (item.baseSalary?.value) {
-    const sal = item.baseSalary.value;
-    tjmMin = sal.minValue ?? sal.value;
-    tjmMax = sal.maxValue ?? sal.value;
+  for (const entry of Object.values(
+    fetchEntries as Record<string, unknown>,
+  )) {
+    if (
+      entry &&
+      typeof entry === 'object' &&
+      'jobs' in entry &&
+      Array.isArray((entry as Record<string, unknown>).jobs)
+    ) {
+      return (entry as Record<string, unknown>).jobs as NuxtJob[];
+    }
   }
 
-  const location = item.jobLocation?.address
-    ? [
-        item.jobLocation.address.addressLocality,
-        item.jobLocation.address.addressRegion,
-      ]
-        .filter(Boolean)
-        .join(', ')
-    : undefined;
+  return [];
+}
+
+function nuxtJobToOffer(job: NuxtJob): ScrapedOffer {
+  const contracts = job.contracts || [];
+  const isFreelance = contracts.includes('contractor');
+  const isCdi = contracts.includes('permanent');
+
+  const location = job.location?.shortLabel || job.location?.label || undefined;
+
+  const skills = (job.skills || [])
+    .map((s) => s.name)
+    .filter(Boolean);
 
   return {
     platform: 'free-work',
-    platformId: String(id),
-    title,
-    description: item.description,
-    buyer: item.hiringOrganization?.name,
+    platformId: String(job.id),
+    title: job.title,
+    description: job.description || undefined,
+    buyer: job.company?.name || undefined,
     location,
-    tjmMin,
-    tjmMax,
-    skills: item.skills,
-    offerType: 'freelance',
-    url:
-      item.url ||
-      `${FREE_WORK_CONFIG.BASE_URL}/${title.toLowerCase().replace(/\s+/g, '-')}-${id}`,
-    deadline: item.validThrough,
-    datePublished: item.datePosted,
+    tjmMin: job.minDailySalary || undefined,
+    tjmMax: job.maxDailySalary || undefined,
+    skills: skills.length > 0 ? skills : undefined,
+    offerType: isFreelance ? 'freelance' : isCdi ? 'cdi' : 'freelance',
+    url: `https://www.free-work.com/fr/tech-it/${job.job?.slug || job.job?.nameForUserSlug || 'jobs'}/job-mission/${job.slug}`,
+    deadline: job.expiredAt || undefined,
+    datePublished: job.publishedAt || undefined,
+    rawData: {
+      remoteMode: job.remoteMode,
+      experienceLevel: job.experienceLevel,
+      duration: job.duration,
+      contracts,
+    },
   };
+}
+
+/**
+ * Check if the listing page has a "next" page link.
+ */
+function hasNextPage(html: string): boolean {
+  const $ = cheerio.load(html);
+  return (
+    $('a[rel="next"], [class*="next"], [aria-label="Next"]').length > 0
+  );
 }
 
 export const freeWorkScraper: Scraper = {
@@ -187,41 +174,31 @@ export const freeWorkScraper: Scraper = {
         try {
           const html = await fetchHtml(url, config.timeout);
 
-          // Try JSON-LD first (most reliable)
-          const jsonLdItems = extractJsonLd(html);
-          if (jsonLdItems.length > 0) {
-            for (const item of jsonLdItems) {
-              const offer = jsonLdToOffer(item);
-              if (offer && !allOffers.has(offer.platformId)) {
-                allOffers.set(offer.platformId, offer);
-              }
-            }
+          const jobs = extractNuxtJobs(html);
+          if (jobs.length === 0) {
+            logger.debug({ term, page }, 'No Nuxt jobs found on page');
+            break;
           }
 
-          // Fallback: parse HTML cards
-          if (jsonLdItems.length === 0) {
-            const htmlOffers = parseJobCardsFromHtml(html);
-            for (const offer of htmlOffers) {
-              if (!allOffers.has(offer.platformId)) {
-                allOffers.set(offer.platformId, offer);
-              }
+          for (const job of jobs) {
+            // Only keep offers located in France
+            const country = job.location?.countryCode || job.location?.country || '';
+            if (country && country !== 'FR' && country !== 'France') continue;
+
+            const offer = nuxtJobToOffer(job);
+            if (!allOffers.has(offer.platformId)) {
+              allOffers.set(offer.platformId, offer);
             }
           }
 
           logger.info(
-            { term, page, found: allOffers.size },
+            { term, page, pageJobs: jobs.length, total: allOffers.size },
             'Free-Work page fetched',
           );
 
-          // Check if there are more pages
-          const $ = cheerio.load(html);
-          const hasNext =
-            $('a[rel="next"], [class*="next"], [aria-label="Next"]').length > 0;
-          if (!hasNext) break;
-
+          if (!hasNextPage(html)) break;
           if (allOffers.size >= RATE_LIMITS.MAX_RESULTS_PER_SCRAPER) break;
 
-          // Rate limit
           await new Promise((r) => setTimeout(r, config.requestDelay));
         } catch (err) {
           logger.warn({ term, page, err }, 'Free-Work page fetch failed');
@@ -243,22 +220,15 @@ export const freeWorkScraper: Scraper = {
   async test(): Promise<{ ok: boolean; error?: string }> {
     try {
       const html = await fetchHtml(FREE_WORK_CONFIG.BASE_URL, 30_000);
+      const jobs = extractNuxtJobs(html);
 
-      // Check JSON-LD
-      const jsonLd = extractJsonLd(html);
-      if (jsonLd.length > 0) {
-        return { ok: true };
-      }
-
-      // Fallback: check HTML cards
-      const cards = parseJobCardsFromHtml(html);
-      if (cards.length > 0) {
+      if (jobs.length > 0) {
         return { ok: true };
       }
 
       return {
         ok: false,
-        error: 'No job cards or JSON-LD found on Free-Work',
+        error: `No jobs found in Nuxt state (HTML length: ${html.length})`,
       };
     } catch (err) {
       return { ok: false, error: String(err) };

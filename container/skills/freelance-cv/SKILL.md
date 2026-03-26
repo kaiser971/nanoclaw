@@ -39,7 +39,7 @@ Quand tu es déclenché après le scraping, tu traites TOUTES les offres en atte
 ## Étape 1 — Trouver toutes les offres en attente
 
 ```bash
-grep -rl "status: pending" /workspace/extra/freelance-radar/*/context.md 2>/dev/null
+find /workspace/extra/freelance-radar -name context.md -exec grep -l "status: pending" {} +
 ```
 
 Compte le nombre total (N) pour le suivi de progression.
@@ -88,6 +88,16 @@ Détermine :
 
 Le skill `resume-optimizer` s'occupe de copier le CV original, l'adapter et le sauvegarder.
 
+### 2d-bis. Générer le PDF
+
+Après génération du CV.docx, **toujours** produire une copie PDF :
+
+```bash
+libreoffice --headless --convert-to pdf --outdir /workspace/extra/freelance-radar/{platform}/{slug}/ /workspace/extra/freelance-radar/{platform}/{slug}/CV.docx
+```
+
+Le dossier de chaque offre retenue doit contenir **CV.docx ET CV.pdf**.
+
 ### 2e. Mettre à jour le context.md
 
 Remplace le contenu avec les résultats :
@@ -120,14 +130,35 @@ cvGenerated: {true|false}
 {ce qui a été modifié dans le CV et pourquoi — rempli par resume-optimizer}
 ```
 
-## Étape 3 — Digest final
+## Étape 3 — Nettoyage du repo
 
-Après avoir traité TOUTES les offres, envoie via `mcp__nanoclaw__send_message` :
+Le repo freelance-radar ne doit contenir **QUE les offres pour lesquelles un CV a été généré**.
+
+Après avoir traité toutes les offres :
+
+1. **Supprimer les dossiers des offres "skip"** (celles sans CV généré) :
+
+```bash
+# Pour chaque offre ayant reçu recommendation: skip
+rm -rf /workspace/extra/freelance-radar/{platform}/{slug}/
+```
+
+2. **Commit git** (les offres retenues s'accumulent dans le repo) :
+
+```bash
+cd /workspace/extra/freelance-radar
+git add -A
+git commit -m "feat: nouvelles offres — $(date +%Y-%m-%d)" || true
+```
+
+## Étape 4 — Digest final
+
+Après le nettoyage et le commit, envoie via `mcp__nanoclaw__send_message` :
 
 ```
 📋 *Traitement terminé* ({date})
 
-{N} offres analysées :
+{N} offres analysées, {nb_cv} CV générés :
 
 🟢 *{titre}* — {plateforme}
    Score Tier 2: {score} | CV généré ✅
@@ -137,8 +168,7 @@ Après avoir traité TOUTES les offres, envoie via `mcp__nanoclaw__send_message`
    Score Tier 2: {score} | CV généré ✅
 
 🔴 *{titre}* — {plateforme}
-   Score Tier 2: {score} | Ignorée (skip)
-   {reasoning court}
+   Score Tier 2: {score} | Ignorée (skip) — supprimée du repo
 
 ───────
 📂 CV et analyses dans freelance-radar
@@ -151,3 +181,5 @@ Après avoir traité TOUTES les offres, envoie via `mcp__nanoclaw__send_message`
 - **Envoyer la progression** à chaque offre (i/N) via MCP
 - **Déléguer la génération CV** au skill resume-optimizer
 - **Ne pas postuler** automatiquement — l'utilisateur valide
+- **Supprimer du repo** les offres "skip" — seules les offres avec CV restent
+- **Git commit** après le nettoyage — les offres s'accumulent entre les runs

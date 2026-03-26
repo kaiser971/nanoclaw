@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    python3 \
+    python3-pip \
+    libreoffice-writer-nogui \
+    && pip3 install --break-system-packages python-docx \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser

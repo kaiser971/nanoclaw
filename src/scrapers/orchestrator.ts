@@ -431,10 +431,7 @@ export function registerAutoapplyTasks(): void {
         (o) => o.score >= SCORING_CONFIG.TIER1_THRESHOLD,
       );
 
-      // Commit new offers to freelance-radar repo
-      if (result.totalInserted > 0) {
-        commitJobRepo(result.totalInserted);
-      }
+      // Don't commit yet — Tier 2 will clean up rejected offers and commit only the good ones.
 
       return {
         result: `${result.totalScraped} scraped, ${result.totalInserted} new, ${pertinent.length} pertinent`,
@@ -444,11 +441,14 @@ export function registerAutoapplyTasks(): void {
                 prompt: `${pertinent.length} nouvelles offres freelance à traiter.
 
 INSTRUCTIONS OBLIGATOIRES :
-1. Lance : grep -rl "status: pending" /workspace/extra/freelance-radar/*/context.md
+1. Lance : find /workspace/extra/freelance-radar -name context.md -exec grep -l "status: pending" {} +
 2. Pour CHAQUE offre pending, AVANT de la traiter, envoie un message via mcp__nanoclaw__send_message : "⏳ Traitement offre X/${pertinent.length} : [titre]..."
 3. Lis le context.md, fais le scoring Tier 2, adapte le CV (copie + modifie /workspace/project/data/freelance/CV.docx avec python-docx)
 4. Mets à jour le context.md avec status: processed et les résultats
-5. APRÈS avoir traité TOUTES les offres, envoie un digest final via mcp__nanoclaw__send_message
+5. APRÈS avoir traité TOUTES les offres :
+   a. Supprime les dossiers des offres "skip" : rm -rf /workspace/extra/freelance-radar/{platform}/{slug}/
+   b. Git commit les offres retenues : cd /workspace/extra/freelance-radar && git add -A && git commit -m "feat: nouvelles offres — $(date +%Y-%m-%d)"
+   c. Envoie un digest final via mcp__nanoclaw__send_message
 
 Profil : /workspace/project/data/freelance/profile.json
 CV source : /workspace/project/data/freelance/CV.docx
