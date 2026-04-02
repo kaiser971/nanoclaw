@@ -61,7 +61,7 @@ import {
   handleSessionCommand,
   isSessionCommandAllowed,
 } from './session-commands.js';
-import { registerAutoapplyTasks } from './scrapers/orchestrator.js';
+import { registerAutoapply } from './autoapply/index.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -666,8 +666,36 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Register Autoapply host-side tasks (scraping, cleanup)
-  registerAutoapplyTasks();
+  // Register Autoapply module (scraping, scoring, CV, PDF pipeline)
+  const { registerHostTask, getHostTask } = await import(
+    './task-scheduler.js'
+  );
+  const autoapply = registerAutoapply({
+    sendMessage: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel) await channel.sendMessage(jid, text);
+    },
+    registerHostTask,
+    getHostTask,
+    enqueueTask: (chatJid, taskId, fn) =>
+      queue.enqueueTask(chatJid, taskId, fn),
+    closeStdin: (chatJid) => queue.closeStdin(chatJid),
+    runContainerAgent,
+    registeredGroups: () => registeredGroups,
+    getSession: (gf) => sessions[gf],
+    setSession: (gf, sid) => {
+      sessions[gf] = sid;
+      setSession(gf, sid);
+    },
+    formatOutbound,
+    registerProcess: (chatJid, proc, containerName, groupFolder) =>
+      queue.registerProcess(chatJid, proc, containerName, groupFolder),
+    assistantName: ASSISTANT_NAME,
+    findChannelAndSend: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel) await channel.sendMessage(jid, text);
+    },
+  });
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -719,105 +747,8 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
-    enqueueContainerRun: (chatJid, prompt, groupFolder, options) => {
-      logger.info(
-        { chatJid, groupFolder, promptLength: prompt.length },
-        '[AUTOAPPLY] enqueueContainerRun called',
-      );
-      const group = Object.values(registeredGroups).find(
-        (g) => g.folder === groupFolder,
-      );
-      if (!group) {
-        logger.warn(
-          { groupFolder },
-          '[AUTOAPPLY] Cannot enqueue container: group not found',
-        );
-        return;
-      }
-      const isMain = group.isMain === true;
-      queue.enqueueTask(chatJid, `autoapply-tier2-${Date.now()}`, async () => {
-        // Heartbeat: periodically notify user the container is still working
-        let heartbeat: ReturnType<typeof setInterval> | null = null;
-        const heartbeatStart = Date.now();
-        if (options?.heartbeatIntervalMs) {
-          heartbeat = setInterval(async () => {
-            const elapsed = Math.round(
-              (Date.now() - heartbeatStart) / 60_000,
-            );
-            try {
-              const channel = findChannel(channels, chatJid);
-              if (channel) {
-                await channel.sendMessage(
-                  chatJid,
-                  `🔄 Traitement en cours… (${elapsed} min)`,
-                );
-              }
-            } catch {
-              // Best effort
-            }
-          }, options.heartbeatIntervalMs);
-        }
-
-        try {
-          const output = await runContainerAgent(
-            group,
-            {
-              prompt,
-              sessionId: sessions[groupFolder],
-              groupFolder,
-              chatJid,
-              isMain,
-              isScheduledTask: true,
-              assistantName: ASSISTANT_NAME,
-            },
-            (proc, containerName) =>
-              queue.registerProcess(chatJid, proc, containerName, groupFolder),
-            async (streamedOutput: ContainerOutput) => {
-              if (streamedOutput.result) {
-                // Stop heartbeat as soon as we get a result
-                if (heartbeat) {
-                  clearInterval(heartbeat);
-                  heartbeat = null;
-                }
-                const channel = findChannel(channels, chatJid);
-                if (channel) {
-                  const text = formatOutbound(streamedOutput.result);
-                  if (text) await channel.sendMessage(chatJid, text);
-                }
-              }
-              if (streamedOutput.status === 'success') {
-                // Also stop heartbeat on success without result
-                if (heartbeat) {
-                  clearInterval(heartbeat);
-                  heartbeat = null;
-                }
-                queue.notifyIdle(chatJid);
-              }
-            },
-          );
-          if (output.newSessionId) {
-            sessions[groupFolder] = output.newSessionId;
-            setSession(groupFolder, output.newSessionId);
-          }
-        } finally {
-          if (heartbeat) clearInterval(heartbeat);
-        }
-
-        // Post-container: generate PDFs + push repo
-        if (options?.onComplete) {
-          try {
-            await options.onComplete();
-            logger.info('[AUTOAPPLY] Post-container onComplete executed');
-          } catch (err) {
-            logger.warn({ err }, '[AUTOAPPLY] Post-container onComplete failed');
-          }
-        }
-      });
-      logger.info(
-        { chatJid, groupFolder },
-        'Container run enqueued for Tier 2 + CV',
-      );
-    },
+    enqueueContainerRun: autoapply.enqueueContainerRun,
+    onRunHostTask: autoapply.handleRunHostTask,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
