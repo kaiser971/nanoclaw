@@ -57,7 +57,7 @@ export const FREELANCE_SEARCH_TERMS = [
   'PHP Symfony',
   'PHP Laravel',
   'Développeur PHP',
-  'Lead Dev PHP',
+  'Lead developer php',
   'Tech Lead PHP',
   'Chef de projet web',
   'Full Stack PHP',
@@ -122,6 +122,15 @@ export const BOAMP_CONFIG = {
 
 export const FREE_WORK_CONFIG = {
   BASE_URL: 'https://www.free-work.com/fr/tech-it/jobs',
+  LOCATIONS: 'fr~~~',
+  CONTRACTS: 'contractor',
+  FRESHNESS: 'less_than_30_days',
+} as const;
+
+// --- Freelance-Informatique ---
+
+export const FREELANCE_INFO_CONFIG = {
+  LISTING_PATH: '/offres-freelance',
 } as const;
 
 // --- Scheduling ---

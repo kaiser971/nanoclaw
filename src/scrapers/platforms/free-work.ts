@@ -47,7 +47,13 @@ interface NuxtJob {
 }
 
 function buildSearchUrl(query: string, page: number): string {
-  const params = new URLSearchParams({ query, page: String(page) });
+  const params = new URLSearchParams({
+    query,
+    page: String(page),
+    locations: FREE_WORK_CONFIG.LOCATIONS,
+    contracts: FREE_WORK_CONFIG.CONTRACTS,
+    freshness: FREE_WORK_CONFIG.FRESHNESS,
+  });
   return `${FREE_WORK_CONFIG.BASE_URL}?${params}`;
 }
 

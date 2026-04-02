@@ -719,7 +719,7 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
-    enqueueContainerRun: (chatJid, prompt, groupFolder) => {
+    enqueueContainerRun: (chatJid, prompt, groupFolder, options) => {
       logger.info(
         { chatJid, groupFolder, promptLength: prompt.length },
         '[AUTOAPPLY] enqueueContainerRun called',
@@ -736,35 +736,81 @@ async function main(): Promise<void> {
       }
       const isMain = group.isMain === true;
       queue.enqueueTask(chatJid, `autoapply-tier2-${Date.now()}`, async () => {
-        const output = await runContainerAgent(
-          group,
-          {
-            prompt,
-            sessionId: sessions[groupFolder],
-            groupFolder,
-            chatJid,
-            isMain,
-            isScheduledTask: true,
-            assistantName: ASSISTANT_NAME,
-          },
-          (proc, containerName) =>
-            queue.registerProcess(chatJid, proc, containerName, groupFolder),
-          async (streamedOutput: ContainerOutput) => {
-            if (streamedOutput.result) {
+        // Heartbeat: periodically notify user the container is still working
+        let heartbeat: ReturnType<typeof setInterval> | null = null;
+        const heartbeatStart = Date.now();
+        if (options?.heartbeatIntervalMs) {
+          heartbeat = setInterval(async () => {
+            const elapsed = Math.round(
+              (Date.now() - heartbeatStart) / 60_000,
+            );
+            try {
               const channel = findChannel(channels, chatJid);
               if (channel) {
-                const text = formatOutbound(streamedOutput.result);
-                if (text) await channel.sendMessage(chatJid, text);
+                await channel.sendMessage(
+                  chatJid,
+                  `🔄 Traitement en cours… (${elapsed} min)`,
+                );
               }
+            } catch {
+              // Best effort
             }
-            if (streamedOutput.status === 'success') {
-              queue.notifyIdle(chatJid);
-            }
-          },
-        );
-        if (output.newSessionId) {
-          sessions[groupFolder] = output.newSessionId;
-          setSession(groupFolder, output.newSessionId);
+          }, options.heartbeatIntervalMs);
+        }
+
+        try {
+          const output = await runContainerAgent(
+            group,
+            {
+              prompt,
+              sessionId: sessions[groupFolder],
+              groupFolder,
+              chatJid,
+              isMain,
+              isScheduledTask: true,
+              assistantName: ASSISTANT_NAME,
+            },
+            (proc, containerName) =>
+              queue.registerProcess(chatJid, proc, containerName, groupFolder),
+            async (streamedOutput: ContainerOutput) => {
+              if (streamedOutput.result) {
+                // Stop heartbeat as soon as we get a result
+                if (heartbeat) {
+                  clearInterval(heartbeat);
+                  heartbeat = null;
+                }
+                const channel = findChannel(channels, chatJid);
+                if (channel) {
+                  const text = formatOutbound(streamedOutput.result);
+                  if (text) await channel.sendMessage(chatJid, text);
+                }
+              }
+              if (streamedOutput.status === 'success') {
+                // Also stop heartbeat on success without result
+                if (heartbeat) {
+                  clearInterval(heartbeat);
+                  heartbeat = null;
+                }
+                queue.notifyIdle(chatJid);
+              }
+            },
+          );
+          if (output.newSessionId) {
+            sessions[groupFolder] = output.newSessionId;
+            setSession(groupFolder, output.newSessionId);
+          }
+        } finally {
+          if (heartbeat) clearInterval(heartbeat);
+        }
+
+        // Post-container: generate PDFs + push repo
+        if (options?.onComplete) {
+          try {
+            await options.onComplete();
+            logger.info('[AUTOAPPLY] Post-container onComplete executed');
+          } catch (err) {
+            logger.warn({ err }, '[AUTOAPPLY] Post-container onComplete failed');
+          }
         }
       });
       logger.info(

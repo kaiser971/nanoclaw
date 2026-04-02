@@ -29,9 +29,13 @@ import type { ScrapedOffer, Scraper, ScraperRunConfig } from './types.js';
 // Import scrapers
 import { boampScraper } from './platforms/boamp.js';
 import { freeWorkScraper } from './platforms/free-work.js';
+import { freelanceInfoScraper } from './platforms/freelance-informatique.js';
 
 /** All registered scrapers. Add new ones here. */
-const SCRAPERS: Scraper[] = [/* boampScraper, */ freeWorkScraper];
+const SCRAPERS: Scraper[] = [
+  /* boampScraper, */ freeWorkScraper,
+  freelanceInfoScraper,
+];
 
 interface InsertedOffer {
   id: string;
@@ -318,6 +322,95 @@ Score: **${score.toFixed(2)}** | Domain: ${breakdown.domainRelevance?.toFixed(2)
 }
 
 /**
+ * Generate PDFs for all CV.docx files missing a corresponding PDF in the job repo.
+ */
+function generateMissingPdfs(): { generated: number; failed: number } {
+  let generated = 0;
+  let failed = 0;
+
+  if (!fs.existsSync(JOB_REPO_DIR)) return { generated, failed };
+
+  for (const platform of fs.readdirSync(JOB_REPO_DIR)) {
+    if (['applied', 'archived', '.git'].includes(platform)) continue;
+    const platformDir = path.join(JOB_REPO_DIR, platform);
+    if (!fs.statSync(platformDir).isDirectory()) continue;
+
+    for (const slug of fs.readdirSync(platformDir)) {
+      const offerDir = path.join(platformDir, slug);
+      if (!fs.statSync(offerDir).isDirectory()) continue;
+
+      const files = fs.readdirSync(offerDir);
+      const docxFiles = files.filter(
+        (f) =>
+          (f.startsWith('CV_') || f === 'CV.docx') && f.endsWith('.docx'),
+      );
+      for (const docxFile of docxFiles) {
+        const pdfFile = docxFile.replace(/\.docx$/, '.pdf');
+        if (files.includes(pdfFile)) continue;
+
+        const result = spawnSync(
+          'docker',
+          [
+            'run',
+            '--rm',
+            '-v',
+            `${offerDir}:/work`,
+            'docx2pdf:latest',
+            '--outdir',
+            '/work/',
+            `/work/${docxFile}`,
+          ],
+          { encoding: 'utf-8' },
+        );
+
+        if (result.status === 0) {
+          generated++;
+          logger.info({ dir: offerDir, file: docxFile }, 'PDF generated');
+        } else {
+          failed++;
+          logger.warn(
+            { dir: offerDir, file: docxFile, stderr: result.stderr },
+            'PDF generation failed',
+          );
+        }
+      }
+    }
+  }
+
+  logger.info({ generated, failed }, 'PDF generation batch complete');
+  return { generated, failed };
+}
+
+/**
+ * Push the freelance-radar repo to remote (container already commits).
+ */
+function pushJobRepo(): void {
+  if (!fs.existsSync(path.join(JOB_REPO_DIR, '.git'))) {
+    logger.warn({ dir: JOB_REPO_DIR }, 'Job repo not found, skipping push');
+    return;
+  }
+
+  try {
+    const opts = { cwd: JOB_REPO_DIR, stdio: 'pipe' as const };
+    execSync('git remote get-url origin', opts);
+
+    // Check if there are unpushed commits
+    const unpushed = execSync('git log --oneline @{u}..HEAD', opts)
+      .toString()
+      .trim();
+    if (!unpushed) {
+      logger.info('Job repo already up to date');
+      return;
+    }
+
+    execSync('git push', opts);
+    logger.info({ unpushed: unpushed.split('\n').length }, 'Job repo pushed');
+  } catch (err) {
+    logger.warn({ err }, 'Job repo push failed');
+  }
+}
+
+/**
  * Git commit + push new offers in the freelance-radar repo.
  */
 function commitJobRepo(offerCount: number): void {
@@ -455,85 +548,37 @@ CV source : /workspace/project/data/freelance/CV.docx
 Repo offres : /workspace/extra/freelance-radar/
 
 Utilise les skills freelance-cv et resume-optimizer.`,
+                heartbeatIntervalMs: 3 * 60_000, // notify user every 3 min
+                onComplete: async () => {
+                  const { generated, failed } = generateMissingPdfs();
+                  if (generated > 0) {
+                    // Commit the new PDFs before pushing
+                    try {
+                      const opts = { cwd: JOB_REPO_DIR, stdio: 'pipe' as const };
+                      execSync('git add -A', opts);
+                      const status = execSync('git status --porcelain', opts).toString().trim();
+                      if (status) {
+                        const date = new Date().toISOString().slice(0, 10);
+                        execSync(
+                          `git commit -m "chore: ${generated} PDF(s) générés — ${date}"`,
+                          opts,
+                        );
+                      }
+                    } catch (err) {
+                      logger.warn({ err }, 'PDF commit failed');
+                    }
+                  }
+                  pushJobRepo();
+                },
               }
             : undefined,
       };
     });
 
     registerHostTask('autoapply_generate_pdfs', async () => {
-      // Find all CV.docx without a corresponding CV.pdf in freelance-radar
-      // (excludes applied/ and archived/)
-      const generated: string[] = [];
-      const failed: string[] = [];
-
-      function findMissingPdfs(
-        dir: string,
-      ): Array<{ offerDir: string; docxFile: string }> {
-        const missing: Array<{ offerDir: string; docxFile: string }> = [];
-        if (!fs.existsSync(dir)) return missing;
-
-        for (const platform of fs.readdirSync(dir)) {
-          if (['applied', 'archived', '.git'].includes(platform)) continue;
-          const platformDir = path.join(dir, platform);
-          if (!fs.statSync(platformDir).isDirectory()) continue;
-
-          for (const slug of fs.readdirSync(platformDir)) {
-            const offerDir = path.join(platformDir, slug);
-            if (!fs.statSync(offerDir).isDirectory()) continue;
-
-            // Find any CV_*.docx (or CV.docx fallback) without a matching PDF
-            const files = fs.readdirSync(offerDir);
-            const docxFiles = files.filter(
-              (f) =>
-                (f.startsWith('CV_') || f === 'CV.docx') && f.endsWith('.docx'),
-            );
-            for (const docxFile of docxFiles) {
-              const pdfFile = docxFile.replace(/\.docx$/, '.pdf');
-              if (!files.includes(pdfFile)) {
-                missing.push({ offerDir, docxFile });
-              }
-            }
-          }
-        }
-        return missing;
-      }
-
-      const missing = findMissingPdfs(JOB_REPO_DIR);
-      logger.info(
-        { count: missing.length },
-        'PDF generation: missing PDFs found',
-      );
-
-      for (const { offerDir, docxFile } of missing) {
-        const result = spawnSync(
-          'docker',
-          [
-            'run',
-            '--rm',
-            '-v',
-            `${offerDir}:/work`,
-            'docx2pdf:latest',
-            '--outdir',
-            '/work/',
-            `/work/${docxFile}`,
-          ],
-          { encoding: 'utf-8' },
-        );
-
-        if (result.status === 0) {
-          generated.push(`${offerDir}/${docxFile}`);
-          logger.info({ dir: offerDir, file: docxFile }, 'PDF generated');
-        } else {
-          failed.push(`${offerDir}/${docxFile}`);
-          logger.warn(
-            { dir: offerDir, file: docxFile, stderr: result.stderr },
-            'PDF generation failed',
-          );
-        }
-      }
-
+      const { generated, failed } = generateMissingPdfs();
       return {
-        result: `${generated.length} PDFs générés, ${failed.length} échecs`,
+        result: `${generated} PDFs générés, ${failed} échecs`,
       };
     });
 

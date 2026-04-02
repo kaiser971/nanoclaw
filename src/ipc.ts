@@ -28,6 +28,10 @@ export interface IpcDeps {
     chatJid: string,
     prompt: string,
     groupFolder: string,
+    options?: {
+      onComplete?: () => Promise<void>;
+      heartbeatIntervalMs?: number;
+    },
   ) => void;
 }
 
@@ -478,6 +482,10 @@ export async function processTaskIpc(
                   chatJid,
                   triggerContainer.prompt,
                   sourceGroup,
+                  {
+                    onComplete: triggerContainer.onComplete,
+                    heartbeatIntervalMs: triggerContainer.heartbeatIntervalMs,
+                  },
                 );
               } else {
                 logger.warn('[AUTOAPPLY] enqueueContainerRun not available');

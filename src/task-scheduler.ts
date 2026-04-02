@@ -25,7 +25,11 @@ import { RegisteredGroup, ScheduledTask } from './types.js';
 
 export type HostTaskFn = () => Promise<{
   result: string;
-  triggerContainer?: { prompt: string };
+  triggerContainer?: {
+    prompt: string;
+    onComplete?: () => Promise<void>;
+    heartbeatIntervalMs?: number;
+  };
 }>;
 
 const hostTaskRegistry = new Map<string, HostTaskFn>();
@@ -175,16 +179,46 @@ async function runTask(
           { taskId: task.id },
           'Host task triggering follow-up container',
         );
-        deps.queue.enqueueTask(task.chat_jid, `${task.id}-followup`, () =>
-          runTask(
-            {
-              ...task,
-              id: `${task.id}-followup`,
-              prompt: triggerContainer.prompt,
-            },
-            deps,
-          ),
-        );
+        deps.queue.enqueueTask(task.chat_jid, `${task.id}-followup`, async () => {
+          // Heartbeat: periodically notify user the container is still working
+          let heartbeat: ReturnType<typeof setInterval> | null = null;
+          const heartbeatStart = Date.now();
+          if (triggerContainer.heartbeatIntervalMs) {
+            heartbeat = setInterval(async () => {
+              const elapsed = Math.round((Date.now() - heartbeatStart) / 60_000);
+              try {
+                await deps.sendMessage(
+                  task.chat_jid,
+                  `🔄 Traitement en cours… (${elapsed} min)`,
+                );
+              } catch {
+                // Best effort, don't break the container run
+              }
+            }, triggerContainer.heartbeatIntervalMs);
+          }
+
+          try {
+            await runTask(
+              {
+                ...task,
+                id: `${task.id}-followup`,
+                prompt: triggerContainer.prompt,
+              },
+              deps,
+            );
+          } finally {
+            if (heartbeat) clearInterval(heartbeat);
+          }
+
+          if (triggerContainer.onComplete) {
+            try {
+              await triggerContainer.onComplete();
+              logger.info({ taskId: task.id }, 'Post-container onComplete executed');
+            } catch (err) {
+              logger.warn({ taskId: task.id, err }, 'Post-container onComplete failed');
+            }
+          }
+        });
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
