@@ -735,11 +735,11 @@ async function main(): Promise<void> {
         return;
       }
       const isMain = group.isMain === true;
-      queue.enqueueTask(chatJid, `autoapply-tier2-${Date.now()}`, async () => {
+      const runContainer = async (containerPrompt: string): Promise<void> => {
         const output = await runContainerAgent(
           group,
           {
-            prompt,
+            prompt: containerPrompt,
             sessionId: sessions[groupFolder],
             groupFolder,
             chatJid,
@@ -758,7 +758,8 @@ async function main(): Promise<void> {
               }
             }
             if (streamedOutput.status === 'success') {
-              queue.notifyIdle(chatJid);
+              // Pipeline tasks: close stdin immediately, don't wait 30min idle
+              queue.closeStdin(chatJid);
             }
           },
         );
@@ -766,10 +767,96 @@ async function main(): Promise<void> {
           sessions[groupFolder] = output.newSessionId;
           setSession(groupFolder, output.newSessionId);
         }
-      });
+      };
+
+      const sendMsg = async (text: string) => {
+        const channel = findChannel(channels, chatJid);
+        if (channel) await channel.sendMessage(chatJid, text);
+      };
+
+      queue.enqueueTask(
+        chatJid,
+        `autoapply-pipeline-${Date.now()}`,
+        async () => {
+          const { getHostTask } = await import('./task-scheduler.js');
+          const { processScoringResults, getScoredWithoutCV, getOfferStats } =
+            await import('./offer-store.js');
+
+          // --- Phase 2a: Scoring Tier 2 (container writes SCORING.json only) ---
+          logger.info('[AUTOAPPLY] Phase 2a: Scoring');
+          await runContainer(prompt);
+
+          // --- Post-scoring: host processes results (deterministic) ---
+          logger.info('[AUTOAPPLY] Processing scoring results (host-side)');
+          const bilan = processScoringResults();
+
+          const totalToGenerate = getScoredWithoutCV().length;
+
+          await sendMsg(
+            `📊 *Bilan scoring Tier 2*\n\n` +
+              `• ${bilan.apply} offres "apply"\n` +
+              `• ${bilan.maybe} offres "maybe"\n` +
+              `• ${bilan.skip} archivées (skip) avec cause.md\n` +
+              `• ${bilan.unscored} non scorées (SCORING.json manquant)\n` +
+              `• ${totalToGenerate} CV à générer` +
+              (bilan.errors.length > 0
+                ? `\n• ${bilan.errors.length} erreurs`
+                : ''),
+          );
+
+          if (totalToGenerate === 0) {
+            logger.info(
+              '[AUTOAPPLY] No offers to generate CV for, stopping pipeline',
+            );
+            await sendMsg(`✅ *Pipeline terminé* — aucun CV à générer.`);
+            return;
+          }
+
+          // --- Phase 2b: CV generation ---
+          const cvTask = getHostTask('autoapply_cv_generation');
+          if (cvTask) {
+            const cvResult = await cvTask();
+            logger.info(
+              { result: cvResult.result },
+              '[AUTOAPPLY] CV generation check',
+            );
+
+            if (cvResult.triggerContainer) {
+              await sendMsg(
+                `✏️ *Génération CV* : ${totalToGenerate} CV à adapter...`,
+              );
+              logger.info('[AUTOAPPLY] Phase 2b: CV generation');
+              await runContainer(cvResult.triggerContainer.prompt);
+              await sendMsg(`✅ Génération CV terminée.`);
+            }
+          }
+
+          // --- Phase 3: PDF generation ---
+          const pdfTask = getHostTask('autoapply_generate_pdfs');
+          if (pdfTask) {
+            logger.info('[AUTOAPPLY] Phase 3: PDF generation');
+            const pdfResult = await pdfTask();
+            logger.info(
+              { result: pdfResult.result },
+              '[AUTOAPPLY] PDF generation completed',
+            );
+            await sendMsg(`📄 ${pdfResult.result}`);
+          }
+
+          // --- Final summary ---
+          const stats = getOfferStats();
+          await sendMsg(
+            `✅ *Pipeline terminé*\n\n` +
+              `• ${stats.recu} offres en attente\n` +
+              `• ${stats.applied} candidatures\n` +
+              `• ${stats.archived} archivées\n` +
+              `• ${stats.total} total`,
+          );
+        },
+      );
       logger.info(
         { chatJid, groupFolder },
-        'Container run enqueued for Tier 2 + CV',
+        'Autoapply pipeline enqueued (scoring → CV → PDF)',
       );
     },
   });
