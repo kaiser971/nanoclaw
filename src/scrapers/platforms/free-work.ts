@@ -7,15 +7,8 @@ import * as cheerio from 'cheerio';
 import { runInNewContext } from 'vm';
 
 import { logger } from '../../logger.js';
-import { computeFingerprint } from '../../offer-store.js';
 import { FREE_WORK_CONFIG, HTTP_CONFIG, RATE_LIMITS } from '../config.js';
-import type {
-  ContractType,
-  RawOffer,
-  RemotePolicy,
-  Scraper,
-  ScraperRunConfig,
-} from '../types.js';
+import type { ScrapedOffer, Scraper, ScraperRunConfig } from '../types.js';
 
 /** Shape of a job object inside __NUXT__.fetch[].jobs */
 interface NuxtJob {
@@ -117,64 +110,35 @@ function extractNuxtJobs(html: string): NuxtJob[] {
   return [];
 }
 
-function mapRemotePolicy(remoteMode?: string): RemotePolicy {
-  if (!remoteMode) return 'unknown';
-  const mode = remoteMode.toLowerCase();
-  if (mode === 'fullremote' || mode === 'full') return 'remote';
-  if (mode === 'hybrid' || mode === 'partial') return 'hybrid';
-  if (mode === 'onsite' || mode === 'no') return 'onsite';
-  return 'unknown';
-}
+function nuxtJobToOffer(job: NuxtJob): ScrapedOffer {
+  const contracts = job.contracts || [];
+  const isFreelance = contracts.includes('contractor');
+  const isCdi = contracts.includes('permanent');
 
-function mapContractType(contracts?: string[]): ContractType {
-  if (!contracts || contracts.length === 0) return 'Unknown';
-  if (contracts.includes('contractor')) return 'Freelance';
-  if (contracts.includes('permanent')) return 'CDI';
-  if (contracts.includes('fixed-term')) return 'CDD';
-  if (contracts.includes('internship')) return 'Stage';
-  if (contracts.includes('apprenticeship')) return 'Alternance';
-  return 'Unknown';
-}
-
-function parseExperienceYears(level?: string): number | null {
-  if (!level) return null;
-  const match = level.match(/(\d+)/);
-  return match ? parseInt(match[1], 10) : null;
-}
-
-function nuxtJobToOffer(job: NuxtJob, searchProfile: string): RawOffer {
-  const location =
-    job.location?.shortLabel || job.location?.label || null;
-  const company = job.company?.name || null;
-  const contractType = mapContractType(job.contracts);
+  const location = job.location?.shortLabel || job.location?.label || undefined;
 
   const skills = (job.skills || []).map((s) => s.name).filter(Boolean);
 
-  const offerUrl = `https://www.free-work.com/fr/tech-it/${job.job?.slug || job.job?.nameForUserSlug || 'jobs'}/job-mission/${job.slug}`;
-
   return {
-    source_site: 'free-work',
-    search_profile: searchProfile,
-    offer_url: offerUrl,
-    apply_url: offerUrl,
-    collected_at: new Date().toISOString(),
-    fingerprint: computeFingerprint(job.title, company, location, contractType),
+    platform: 'free-work',
+    platformId: String(job.id),
     title: job.title,
-    company,
-    requester: null,
-    intermediary: null,
+    description: job.description || undefined,
+    buyer: job.company?.name || undefined,
     location,
-    remote_policy: mapRemotePolicy(job.remoteMode),
-    contract_type: contractType,
-    salary_min: job.minAnnualSalary ?? null,
-    salary_max: job.maxAnnualSalary ?? null,
-    daily_rate: job.minDailySalary ?? null,
-    currency: 'EUR',
-    team_size: null,
-    experience_years: parseExperienceYears(job.experienceLevel),
-    skills_required: skills,
-    skills_optional: [],
-    description_raw: job.description || '',
+    tjmMin: job.minDailySalary || undefined,
+    tjmMax: job.maxDailySalary || undefined,
+    skills: skills.length > 0 ? skills : undefined,
+    offerType: isFreelance ? 'freelance' : isCdi ? 'cdi' : 'freelance',
+    url: `https://www.free-work.com/fr/tech-it/${job.job?.slug || job.job?.nameForUserSlug || 'jobs'}/job-mission/${job.slug}`,
+    deadline: job.expiredAt || undefined,
+    datePublished: job.publishedAt || undefined,
+    rawData: {
+      remoteMode: job.remoteMode,
+      experienceLevel: job.experienceLevel,
+      duration: job.duration,
+      contracts,
+    },
   };
 }
 
@@ -187,11 +151,11 @@ function hasNextPage(html: string): boolean {
 }
 
 export const freeWorkScraper: Scraper = {
-  site: 'free-work',
+  platform: 'free-work',
   name: 'Free-Work',
 
-  async scrape(config: ScraperRunConfig): Promise<RawOffer[]> {
-    const allOffers = new Map<string, RawOffer>();
+  async scrape(config: ScraperRunConfig): Promise<ScrapedOffer[]> {
+    const allOffers = new Map<string, ScrapedOffer>();
     const terms =
       config.searchTerms.length > 0
         ? config.searchTerms
@@ -216,9 +180,9 @@ export const freeWorkScraper: Scraper = {
               job.location?.countryCode || job.location?.country || '';
             if (country && country !== 'FR' && country !== 'France') continue;
 
-            const offer = nuxtJobToOffer(job, config.searchProfile);
-            if (!allOffers.has(offer.fingerprint)) {
-              allOffers.set(offer.fingerprint, offer);
+            const offer = nuxtJobToOffer(job);
+            if (!allOffers.has(offer.platformId)) {
+              allOffers.set(offer.platformId, offer);
             }
           }
 

@@ -1,5 +1,5 @@
 /**
- * Scraper orchestrator — runs all scrapers, deduplicates, stores in OFFRES/.
+ * Scraper orchestrator — runs all scrapers, deduplicates, stores in DB.
  * Designed to run host-side (no container needed).
  */
 
@@ -10,254 +10,327 @@ import path from 'path';
 import { DATA_DIR } from '../config.js';
 import { logger } from '../logger.js';
 import {
-  initOfferStore,
-  getOffresDir,
-  isDuplicate,
+  initFreelanceDb,
   insertOffer,
-  registerForDedup,
-  flushRegistry,
-  getOffersByStatus,
-  getUnscoredOffers,
-  getScoredWithoutCV,
-  getPendingOffers,
+  updateOfferScore,
+  getOfferById,
   getOfferStats,
-  archiveExpiredOffers,
-  purgeOldOffers,
-  writeRapportLog,
-} from '../offer-store.js';
+  getTopOffers,
+} from '../freelance-db.js';
 import {
   RATE_LIMITS,
   SCORING_CONFIG,
-  SEARCH_PROFILES,
+  FREELANCE_SEARCH_TERMS,
+  ALL_SEARCH_TERMS,
 } from './config.js';
 import { scoreOffer } from './relevance.js';
-import type { RawOffer, Scraper, ScraperRunConfig } from './types.js';
+import type { ScrapedOffer, Scraper, ScraperRunConfig } from './types.js';
 
 // Import scrapers
 import { boampScraper } from './platforms/boamp.js';
 import { freeWorkScraper } from './platforms/free-work.js';
 
-/** Last scraping result, used by buildDigest to access ignored offers. */
-let lastScrapingResult: ScrapingResult | null = null;
-
-/** All registered scrapers, keyed by site name. */
-const SCRAPERS: Record<string, Scraper> = {
-  'free-work': freeWorkScraper,
-  // boamp: boampScraper, // Disabled for now
-};
+/** All registered scrapers. Add new ones here. */
+const SCRAPERS: Scraper[] = [/* boampScraper, */ freeWorkScraper];
 
 interface InsertedOffer {
+  id: string;
   title: string;
-  site: string;
+  platform: string;
   score: number;
-  folderPath: string;
+  slug: string;
+}
+
+/** Path to the job tracking repo. Configurable via env var. */
+const JOB_REPO_DIR = path.resolve(
+  process.env.AUTOAPPLY_JOB_REPO ||
+    path.join(process.cwd(), '..', 'freelance-radar'),
+);
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60);
 }
 
 export interface ScrapingResult {
   totalScraped: number;
   totalInserted: number;
-  totalDuplicates: number;
-  totalBelowThreshold: number;
   newOffers: InsertedOffer[];
-  ignoredOffers: Array<{ title: string; site: string; reason: string; score?: number }>;
-  byProfile: Record<string, { scraped: number; inserted: number }>;
-  errors: Array<{ profile: string; site: string; error: string }>;
+  byPlatform: Record<string, { scraped: number; inserted: number }>;
+  errors: Array<{ platform: string; error: string }>;
 }
 
 /**
- * Run all registered scrapers for each search profile, deduplicate, and store in OFFRES/.
+ * Run all registered scrapers sequentially, deduplicate, and store in DB.
  * Returns a summary of the run.
  */
 export async function runAllScrapers(): Promise<ScrapingResult> {
-  initOfferStore();
+  // Ensure DB is ready
+  initFreelanceDb();
 
   const result: ScrapingResult = {
     totalScraped: 0,
     totalInserted: 0,
-    totalDuplicates: 0,
-    totalBelowThreshold: 0,
     newOffers: [],
-    ignoredOffers: [],
-    byProfile: {},
+    byPlatform: {},
     errors: [],
   };
 
-  logger.info(
-    { profileCount: SEARCH_PROFILES.length },
-    'Starting scraping run',
-  );
+  logger.info({ scraperCount: SCRAPERS.length }, 'Starting scraping run');
 
-  for (let pi = 0; pi < SEARCH_PROFILES.length; pi++) {
-    const profile = SEARCH_PROFILES[pi];
-    let profileScraped = 0;
-    let profileInserted = 0;
+  for (let i = 0; i < SCRAPERS.length; i++) {
+    const scraper = SCRAPERS[i];
 
-    for (const siteName of profile.sites) {
-      const scraper = SCRAPERS[siteName];
-      if (!scraper) {
-        logger.warn({ site: siteName }, 'Unknown scraper site, skipping');
+    // Build config per scraper
+    const config: ScraperRunConfig = {
+      searchTerms:
+        scraper.platform === 'boamp'
+          ? ALL_SEARCH_TERMS
+          : FREELANCE_SEARCH_TERMS,
+      maxPages: RATE_LIMITS.MAX_PAGES_PER_RUN,
+      requestDelay: RATE_LIMITS.SAME_DOMAIN_DELAY,
+      timeout: RATE_LIMITS.REQUEST_TIMEOUT,
+    };
+
+    try {
+      // Test scraper health first
+      const testResult = await scraper.test();
+      if (!testResult.ok) {
+        logger.warn(
+          { platform: scraper.platform, error: testResult.error },
+          'Scraper test failed, skipping',
+        );
+        result.errors.push({
+          platform: scraper.platform,
+          error: `Test failed: ${testResult.error}`,
+        });
         continue;
       }
 
-      const config: ScraperRunConfig = {
-        searchTerms: profile.searchTerms,
-        searchProfile: profile.name,
-        maxPages: RATE_LIMITS.MAX_PAGES_PER_RUN,
-        requestDelay: RATE_LIMITS.SAME_DOMAIN_DELAY,
-        timeout: RATE_LIMITS.REQUEST_TIMEOUT,
-      };
+      // Run the scraper
+      const offers = await scraper.scrape(config);
 
-      try {
-        // Test scraper health first
-        const testResult = await scraper.test();
-        if (!testResult.ok) {
-          logger.warn(
-            { site: siteName, error: testResult.error },
-            'Scraper test failed, skipping',
-          );
-          result.errors.push({
-            profile: profile.name,
-            site: siteName,
-            error: `Test failed: ${testResult.error}`,
-          });
-          continue;
-        }
+      // Insert one by one, stop at MAX_NEW_RESULTS new offers
+      let scraped = 0;
+      let inserted = 0;
+      for (const offer of offers) {
+        scraped++;
+        const isNew = insertOffer(offer);
+        if (isNew) {
+          inserted++;
 
-        // Run the scraper
-        const offers = await scraper.scrape(config);
+          // Score immediately after insertion
+          const offerId = `${offer.platform}_${offer.platformId}`;
+          const { score, breakdown } = scoreOffer(offer);
+          updateOfferScore(offerId, score, 1);
 
-        for (const offer of offers) {
-          profileScraped++;
+          const slug = slugify(offer.title);
 
-          // Check dedup before scoring
-          if (isDuplicate(offer.offer_url, offer.fingerprint)) {
-            result.totalDuplicates++;
-            continue;
-          }
-
-          // Score the offer
-          const { score } = scoreOffer(offer);
-
+          // Write to JOBTOAPPLY/{platform}/{slug}/description.md
           if (score >= SCORING_CONFIG.TIER1_THRESHOLD) {
-            // Insert with folder creation
-            const { inserted, folderPath } = insertOffer(offer, score);
-            if (inserted && folderPath) {
-              profileInserted++;
-              result.newOffers.push({
-                title: offer.title,
-                site: siteName,
-                score,
-                folderPath,
-              });
+            writeOfferDescription(offer, score, breakdown);
+          }
 
-              logger.debug(
-                {
-                  site: siteName,
-                  profile: profile.name,
-                  score,
-                  title: offer.title.slice(0, 60),
-                },
-                'New offer stored and scored',
-              );
+          result.newOffers.push({
+            id: offerId,
+            title: offer.title,
+            platform: offer.platform,
+            score,
+            slug,
+          });
 
-              if (profileInserted >= RATE_LIMITS.MAX_NEW_RESULTS) {
-                logger.info(
-                  { profile: profile.name, limit: RATE_LIMITS.MAX_NEW_RESULTS },
-                  'Max new results reached, stopping profile',
-                );
-                break;
-              }
-            }
-          } else {
-            // Register for dedup only (no folder)
-            registerForDedup(offer, score);
-            result.totalBelowThreshold++;
-            const reason = score === 0
-              ? 'Hard-exclusion (titre, localisation ou compétence exclue)'
-              : `Score Tier 1 insuffisant (${score.toFixed(2)} < ${SCORING_CONFIG.TIER1_THRESHOLD})`;
-            result.ignoredOffers.push({
-              title: offer.title,
-              site: siteName,
-              reason,
+          logger.debug(
+            {
+              platform: scraper.platform,
+              id: offer.platformId,
               score,
-            });
+              title: offer.title.slice(0, 60),
+            },
+            'New offer stored and scored',
+          );
+          if (inserted >= RATE_LIMITS.MAX_NEW_RESULTS) {
+            logger.info(
+              {
+                platform: scraper.platform,
+                limit: RATE_LIMITS.MAX_NEW_RESULTS,
+              },
+              'Max new results reached, stopping scraper',
+            );
+            break;
           }
         }
-
-        logger.info(
-          { site: siteName, profile: profile.name, scraped: profileScraped, inserted: profileInserted },
-          'Scraper completed for profile',
-        );
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        logger.error(
-          { site: siteName, profile: profile.name, err },
-          'Scraper failed',
-        );
-        result.errors.push({
-          profile: profile.name,
-          site: siteName,
-          error: errorMsg,
-        });
       }
 
-      // Delay between scrapers
-      await new Promise((r) => setTimeout(r, RATE_LIMITS.INTER_SCRAPER_DELAY));
+      result.totalScraped += scraped;
+      result.totalInserted += inserted;
+      result.byPlatform[scraper.platform] = { scraped, inserted };
+
+      logger.info(
+        { platform: scraper.platform, scraped, inserted },
+        'Scraper completed',
+      );
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      logger.error({ platform: scraper.platform, err }, 'Scraper failed');
+      result.errors.push({ platform: scraper.platform, error: errorMsg });
     }
 
-    result.byProfile[profile.name] = {
-      scraped: profileScraped,
-      inserted: profileInserted,
-    };
-    result.totalScraped += profileScraped;
-    result.totalInserted += profileInserted;
+    // Delay between different scrapers
+    if (i < SCRAPERS.length - 1) {
+      await new Promise((r) => setTimeout(r, RATE_LIMITS.INTER_SCRAPER_DELAY));
+    }
   }
-
-  // Flush registry to disk after all inserts
-  flushRegistry();
 
   const stats = getOfferStats();
   logger.info(
     {
       totalScraped: result.totalScraped,
       totalInserted: result.totalInserted,
-      storeTotal: stats.total,
+      dbTotal: stats.total,
       errors: result.errors.length,
     },
     'Scraping run completed',
   );
 
-  // Write rapport
-  const date = new Date().toISOString();
-  writeRapportLog(
-    `[${date}] Scraped: ${result.totalScraped}, Inserted: ${result.totalInserted}, ` +
-      `Duplicates: ${result.totalDuplicates}, Ignored: ${result.totalBelowThreshold}, ` +
-      `Errors: ${result.errors.length}\n` +
-      `Profiles: ${JSON.stringify(result.byProfile)}\n` +
-      `Store: ${JSON.stringify(stats)}\n`,
-  );
-
-  // Store for buildDigest to access
-  lastScrapingResult = result;
-
   return result;
+}
+
+/**
+ * Write a description.md for an offer in JOBTOAPPLY/{platform}/{slug}/
+ */
+function writeOfferDescription(
+  offer: ScrapedOffer,
+  score: number,
+  breakdown: Record<string, number>,
+): void {
+  const slug = slugify(offer.title);
+  const offerDir = path.join(JOB_REPO_DIR, offer.platform, slug);
+  fs.mkdirSync(offerDir, { recursive: true });
+
+  const descPath = path.join(offerDir, 'description.md');
+
+  // Don't overwrite if already exists
+  if (fs.existsSync(descPath)) return;
+
+  const skills = (offer.skills || []).join(', ') || 'Non spécifiées';
+  const now = new Date().toISOString().slice(0, 10);
+
+  const md = `# ${offer.title}
+
+## Informations
+
+| Champ | Valeur |
+|-------|--------|
+| **Plateforme** | ${offer.platform} |
+| **Acheteur** | ${offer.buyer || '—'} |
+| **Localisation** | ${offer.location || '—'} |
+| **TJM** | ${offer.tjmMin ? `${offer.tjmMin}–${offer.tjmMax || '?'}€/j` : '—'} |
+| **Type** | ${offer.offerType} |
+| **Deadline** | ${offer.deadline?.slice(0, 10) || '—'} |
+| **Publiée** | ${offer.datePublished?.slice(0, 10) || '—'} |
+| **URL** | ${offer.url} |
+| **Scrapée le** | ${now} |
+
+## Compétences demandées
+
+${skills}
+
+## Description
+
+${offer.description || "*Description non disponible — consulter l'URL de l'offre.*"}
+
+## Scoring Tier 1 (automatique)
+
+**Score global : ${score.toFixed(2)}**
+
+| Critère | Score |
+|---------|-------|
+| Compétences (skill match) | ${breakdown.skillMatch?.toFixed(2) || '—'} |
+| Pertinence domaine | ${breakdown.domainRelevance?.toFixed(2) || '—'} |
+| Expérience | ${breakdown.experienceMatch?.toFixed(2) || '—'} |
+| Localisation | ${breakdown.locationMatch?.toFixed(2) || '—'} |
+| TJM | ${breakdown.tjmMatch?.toFixed(2) || '—'} |
+| Fraîcheur | ${breakdown.freshnessBonus?.toFixed(2) || '—'} |
+
+## Pourquoi cette offre
+
+${score >= 0.6 ? '🟢 **Fortement recommandée**' : score >= 0.4 ? '🟡 **Correspondance partielle**' : '🟠 **À vérifier**'} — ${
+    breakdown.domainRelevance >= 0.6
+      ? 'Le domaine correspond directement au profil (maintenance applicative, développement web, IA).'
+      : 'Le domaine est adjacent au profil.'
+  }
+
+---
+
+*Généré automatiquement par Autoapply le ${now}. Le scoring Tier 2 (Claude) et le CV adapté seront ajoutés après analyse.*
+`;
+
+  fs.writeFileSync(descPath, md, 'utf-8');
+
+  // Write context.md for container processing
+  const contextPath = path.join(offerDir, 'context.md');
+  if (!fs.existsSync(contextPath)) {
+    const context = `---
+status: pending
+platform: ${offer.platform}
+slug: ${slug}
+offerId: ${offer.platform}_${offer.platformId}
+tier1Score: ${score.toFixed(2)}
+createdAt: ${now}
+---
+
+# Contexte pour adaptation CV
+
+## Offre
+- **Titre** : ${offer.title}
+- **Acheteur** : ${offer.buyer || '—'}
+- **Type** : ${offer.offerType}
+- **URL** : ${offer.url}
+- **Deadline** : ${offer.deadline?.slice(0, 10) || '—'}
+- **Compétences** : ${skills}
+
+## Description complète
+
+${offer.description || "*Consulter l'URL de l'offre pour la description complète.*"}
+
+## Scoring Tier 1
+
+Score: **${score.toFixed(2)}** | Domain: ${breakdown.domainRelevance?.toFixed(2)} | Skills: ${breakdown.skillMatch?.toFixed(2)} | XP: ${breakdown.experienceMatch?.toFixed(2)}
+
+## Instructions
+
+1. Faire le scoring Tier 2 (analyse sémantique)
+2. Si recommendation "apply" ou "maybe" : générer un CV adapté
+3. Mettre à jour ce fichier avec les résultats (status: processed)
+`;
+    fs.writeFileSync(contextPath, context, 'utf-8');
+  }
+
+  logger.info(
+    { platform: offer.platform, slug },
+    'Offer description + context written',
+  );
 }
 
 /**
  * Git commit + push new offers in the freelance-radar repo.
  */
 function commitJobRepo(offerCount: number): void {
-  const repoDir = path.dirname(getOffresDir()); // freelance-radar/ (parent of OFFRES/)
-  if (!fs.existsSync(path.join(repoDir, '.git'))) {
+  if (!fs.existsSync(path.join(JOB_REPO_DIR, '.git'))) {
     logger.warn(
-      { dir: repoDir },
-      'freelance-radar repo not initialized, skipping commit',
+      { dir: JOB_REPO_DIR },
+      'Job repo not initialized, skipping commit',
     );
     return;
   }
 
   try {
-    const opts = { cwd: repoDir, stdio: 'pipe' as const };
+    const opts = { cwd: JOB_REPO_DIR, stdio: 'pipe' as const };
     execSync('git add -A', opts);
 
     // Check if there's anything to commit
@@ -269,18 +342,18 @@ function commitJobRepo(offerCount: number): void {
       `git commit -m "feat: ${offerCount} nouvelle(s) offre(s) — ${date}"`,
       opts,
     );
-    logger.info({ offerCount }, 'OFFRES repo committed');
+    logger.info({ offerCount }, 'Job repo committed');
 
     // Push if remote is configured
     try {
       execSync('git remote get-url origin', opts);
       execSync('git push', opts);
-      logger.info('OFFRES repo pushed');
+      logger.info('Job repo pushed');
     } catch {
       // No remote configured, skip push
     }
   } catch (err) {
-    logger.warn({ err }, 'OFFRES repo commit failed');
+    logger.warn({ err }, 'Job repo commit failed');
   }
 }
 
@@ -292,19 +365,47 @@ export function writeOffersToIpc(
   groupFolder: string,
   offers: InsertedOffer[],
 ): void {
-  if (offers.length === 0) {
+  const pertinent = offers.filter(
+    (o) => o.score >= SCORING_CONFIG.TIER1_THRESHOLD,
+  );
+
+  if (pertinent.length === 0) {
     logger.info('No pertinent offers to write to IPC');
     return;
   }
+
+  // Build full offer data for the container
+  const fullOffers = pertinent
+    .map((o) => {
+      const dbOffer = getOfferById(o.id);
+      if (!dbOffer) return null;
+      return {
+        id: dbOffer.id,
+        platform: dbOffer.platform,
+        title: dbOffer.title,
+        description: dbOffer.description,
+        buyer: dbOffer.buyer,
+        location: dbOffer.location,
+        tjmMin: dbOffer.tjmMin,
+        tjmMax: dbOffer.tjmMax,
+        skills: dbOffer.skills,
+        offerType: dbOffer.offerType,
+        url: dbOffer.url,
+        deadline: dbOffer.deadline,
+        datePublished: dbOffer.datePublished,
+        tier1Score: dbOffer.relevanceScore,
+      };
+    })
+    .filter(Boolean);
 
   const ipcDir = path.join(DATA_DIR, 'ipc', groupFolder, 'input');
   fs.mkdirSync(ipcDir, { recursive: true });
 
   const payload = {
-    offerFolders: offers.map((o) => o.folderPath),
-    offresDir: getOffresDir(),
+    offers: fullOffers,
     profilePath: '/workspace/project/data/freelance/profile.json',
     cvPath: '/workspace/project/data/freelance/CV.docx',
+    jobDir: '/workspace/project/JOBTOAPPLY',
     scrapedAt: new Date().toISOString(),
   };
 
@@ -312,41 +413,9 @@ export function writeOffersToIpc(
   fs.writeFileSync(ipcFile, JSON.stringify(payload, null, 2));
 
   logger.info(
-    { count: offers.length, path: ipcFile },
+    { count: fullOffers.length, path: ipcFile },
     'Offers written to IPC for container',
   );
-}
-
-/**
- * Build the container prompt for Tier 2 scoring only (no CV generation).
- */
-function buildScoringPrompt(count: number): string {
-  return `${count} offres en attente de scoring Tier 2.
-
-INSTRUCTIONS — SCORING UNIQUEMENT :
-1. Trouve les offres à scorer (celles dans RECU/ sans SCORING.json) :
-   find /workspace/extra/freelance-radar/OFFRES -path "*/RECU/*/RAW.json" | while read f; do d=$(dirname "$f"); [ ! -f "$d/SCORING.json" ] && echo "$d"; done | sort
-2. Pour CHAQUE offre, envoie un message via mcp__nanoclaw__send_message : "⏳ Scoring offre X/${count} : [titre]..."
-3. Lis le RAW.json, évalue la pertinence sémantique par rapport au profil
-4. Écris un fichier SCORING.json dans le dossier de l'offre avec cette structure EXACTE :
-   {
-     "tier2_score": 0.85,
-     "recommendation": "apply",
-     "reasoning": "Explication détaillée de pourquoi cette offre est retenue ou rejetée...",
-     "matched_skills": ["PHP", "Symfony", "Docker"],
-     "missing_skills": ["Terraform"]
-   }
-   - recommendation : "apply" (>= 0.7), "maybe" (0.5–0.7), "skip" (< 0.5)
-   - reasoning : OBLIGATOIRE, doit expliquer précisément les raisons du score
-
-RÈGLES STRICTES :
-- NE PAS déplacer de dossiers. NE PAS supprimer de dossiers. Le host s'en charge.
-- NE PAS générer de CV. NE PAS appeler le skill resume-optimizer.
-- ÉCRIRE un SCORING.json pour CHAQUE offre sans exception.
-- Le champ "reasoning" doit être rempli pour TOUTES les offres (apply, maybe ET skip).
-
-Profil : /workspace/project/data/freelance/profile.json
-Repo offres : /workspace/extra/freelance-radar/OFFRES/`;
 }
 
 /**
@@ -356,212 +425,142 @@ Repo offres : /workspace/extra/freelance-radar/OFFRES/`;
 export function registerAutoapplyTasks(): void {
   // Lazy import to avoid circular dependency
   import('../task-scheduler.js').then(({ registerHostTask }) => {
-    // --- Step 1: Scraping + Tier 1 scoring (host-side) ---
     registerHostTask('autoapply_scraping', async () => {
       const result = await runAllScrapers();
+      const pertinent = result.newOffers.filter(
+        (o) => o.score >= SCORING_CONFIG.TIER1_THRESHOLD,
+      );
 
-      const unscoredOffers = getUnscoredOffers();
-      const totalRecu = getOffersByStatus('RECU').length;
-      const alreadyProcessed = totalRecu - unscoredOffers.length;
+      // Don't commit yet — Tier 2 will clean up rejected offers and commit only the good ones.
 
       return {
-        result: `${result.totalScraped} scraped, ${result.totalInserted} new, ${result.newOffers.length} pertinent, ${unscoredOffers.length} pending, ${alreadyProcessed} already_processed, ${result.totalDuplicates} duplicates, ${result.totalBelowThreshold} ignored`,
-        // Trigger scoring if there are unscored offers
+        result: `${result.totalScraped} scraped, ${result.totalInserted} new, ${pertinent.length} pertinent`,
         triggerContainer:
-          unscoredOffers.length > 0
-            ? { prompt: buildScoringPrompt(unscoredOffers.length) }
+          pertinent.length > 0
+            ? {
+                prompt: `${pertinent.length} nouvelles offres freelance à traiter.
+
+INSTRUCTIONS OBLIGATOIRES :
+1. Lance : find /workspace/extra/freelance-radar -name context.md -exec grep -l "status: pending" {} +
+2. Pour CHAQUE offre pending, AVANT de la traiter, envoie un message via mcp__nanoclaw__send_message : "⏳ Traitement offre X/${pertinent.length} : [titre]..."
+3. Lis le context.md, fais le scoring Tier 2, adapte le CV (copie + modifie /workspace/project/data/freelance/CV.docx avec python-docx)
+4. Mets à jour le context.md avec status: processed et les résultats
+5. APRÈS avoir traité TOUTES les offres :
+   a. Supprime les dossiers des offres "skip" : rm -rf /workspace/extra/freelance-radar/{platform}/{slug}/
+   b. Git commit les offres retenues : cd /workspace/extra/freelance-radar && git add -A && git commit -m "feat: nouvelles offres — $(date +%Y-%m-%d)"
+   c. Envoie un digest final via mcp__nanoclaw__send_message
+
+Profil : /workspace/project/data/freelance/profile.json
+CV source : /workspace/project/data/freelance/CV.docx
+Repo offres : /workspace/extra/freelance-radar/
+
+Utilise les skills freelance-cv et resume-optimizer.`,
+              }
             : undefined,
       };
     });
 
-    // --- Step 2: Tier 2 semantic scoring (container) ---
-    registerHostTask('autoapply_scoring', async () => {
-      const unscored = getUnscoredOffers();
-      if (unscored.length === 0) {
-        return { result: '0 offers to score' };
-      }
-      return {
-        result: `${unscored.length} offers to score`,
-        triggerContainer: { prompt: buildScoringPrompt(unscored.length) },
-      };
-    });
-
-    // --- Step 3: CV generation (container) ---
-    registerHostTask('autoapply_cv_generation', async () => {
-      const needCV = getScoredWithoutCV();
-      if (needCV.length === 0) {
-        return { result: '0 CVs to generate' };
-      }
-
-      const offerPaths = needCV
-        .map((o) => o.folderPath.replace(getOffresDir(), '/workspace/extra/freelance-radar/OFFRES'))
-        .join('\n');
-
-      return {
-        result: `${needCV.length} CVs to generate`,
-        triggerContainer: {
-          prompt: `${needCV.length} offres ont passé le scoring Tier 2 et nécessitent un CV adapté.
-
-INSTRUCTIONS :
-1. Pour CHAQUE offre ci-dessous :
-   a. Lis RAW.json et SCORING.json
-   b. Copie le CV source puis adapte-le avec python-docx (skill resume-optimizer)
-   c. Si libreoffice est disponible, génère aussi le PDF : libreoffice --headless --convert-to pdf --outdir {offer_dir} {offer_dir}/CV_*.docx
-   d. Envoie un message de progression via mcp__nanoclaw__send_message : "✏️ CV {i}/${needCV.length} : [titre] — CV généré [+ PDF]"
-2. APRÈS avoir généré TOUS les CV :
-   cd /workspace/extra/freelance-radar && git add -A && git commit -m "feat: CV générés — $(date +%Y-%m-%d)" || true
-3. Envoie un message récapitulatif final via mcp__nanoclaw__send_message indiquant :
-   - Nombre de CV DOCX générés
-   - Nombre de PDF générés
-   - Liste des offres traitées avec le nom de l'entreprise
-
-Profil : /workspace/project/data/freelance/profile.json
-CV source : /workspace/project/data/freelance/CV.docx
-
-Offres (${needCV.length}) :
-${offerPaths}
-
-Utilise le skill resume-optimizer.`,
-        },
-      };
-    });
-
     registerHostTask('autoapply_generate_pdfs', async () => {
-      const offresDir = getOffresDir();
+      // Find all CV.docx without a corresponding CV.pdf in freelance-radar
+      // (excludes applied/ and archived/)
       const generated: string[] = [];
       const failed: string[] = [];
-      let alreadyHavePdf = 0;
 
-      function findCvDocxFiles(
+      function findMissingPdfs(
         dir: string,
-      ): Array<{ offerDir: string; docxFile: string; hasPdf: boolean }> {
-        const results: Array<{ offerDir: string; docxFile: string; hasPdf: boolean }> = [];
-        if (!fs.existsSync(dir)) return results;
+      ): Array<{ offerDir: string; docxFile: string }> {
+        const missing: Array<{ offerDir: string; docxFile: string }> = [];
+        if (!fs.existsSync(dir)) return missing;
 
-        for (const site of fs.readdirSync(dir)) {
-          if (['queue', '.git'].includes(site) || site.startsWith('.'))
-            continue;
-          const siteDir = path.join(dir, site);
-          if (!fs.statSync(siteDir).isDirectory()) continue;
+        for (const platform of fs.readdirSync(dir)) {
+          if (['applied', 'archived', '.git'].includes(platform)) continue;
+          const platformDir = path.join(dir, platform);
+          if (!fs.statSync(platformDir).isDirectory()) continue;
 
-          for (const profile of fs.readdirSync(siteDir)) {
-            const profileDir = path.join(siteDir, profile);
-            if (!fs.statSync(profileDir).isDirectory()) continue;
+          for (const slug of fs.readdirSync(platformDir)) {
+            const offerDir = path.join(platformDir, slug);
+            if (!fs.statSync(offerDir).isDirectory()) continue;
 
-            for (const status of ['RECU', 'APPLIED']) {
-              const statusDir = path.join(profileDir, status);
-              if (!fs.existsSync(statusDir)) continue;
-
-              for (const folder of fs.readdirSync(statusDir)) {
-                const offerDir = path.join(statusDir, folder);
-                if (!fs.statSync(offerDir).isDirectory()) continue;
-
-                const files = fs.readdirSync(offerDir);
-                const docxFiles = files.filter(
-                  (f) =>
-                    (f.startsWith('CV_') || f === 'CV.docx') &&
-                    f.endsWith('.docx'),
-                );
-                for (const docxFile of docxFiles) {
-                  const pdfFile = docxFile.replace(/\.docx$/, '.pdf');
-                  results.push({ offerDir, docxFile, hasPdf: files.includes(pdfFile) });
-                }
+            // Find any CV_*.docx (or CV.docx fallback) without a matching PDF
+            const files = fs.readdirSync(offerDir);
+            const docxFiles = files.filter(
+              (f) =>
+                (f.startsWith('CV_') || f === 'CV.docx') && f.endsWith('.docx'),
+            );
+            for (const docxFile of docxFiles) {
+              const pdfFile = docxFile.replace(/\.docx$/, '.pdf');
+              if (!files.includes(pdfFile)) {
+                missing.push({ offerDir, docxFile });
               }
             }
           }
         }
-        return results;
+        return missing;
       }
 
-      const allCvs = findCvDocxFiles(offresDir);
-      const missing = allCvs.filter((c) => !c.hasPdf);
-      alreadyHavePdf = allCvs.filter((c) => c.hasPdf).length;
-
+      const missing = findMissingPdfs(JOB_REPO_DIR);
       logger.info(
-        { total: allCvs.length, alreadyHavePdf, missing: missing.length },
-        'PDF generation: CV scan complete',
+        { count: missing.length },
+        'PDF generation: missing PDFs found',
       );
 
       for (const { offerDir, docxFile } of missing) {
-        const pdfResult = spawnSync(
+        const result = spawnSync(
           'docker',
           [
             'run',
             '--rm',
             '-v',
             `${offerDir}:/work`,
-            '-w',
-            '/work',
             'docx2pdf:latest',
+            '--outdir',
+            '/work/',
             `/work/${docxFile}`,
           ],
-          { encoding: 'utf-8', timeout: 60_000 },
+          { encoding: 'utf-8' },
         );
 
-        if (pdfResult.status === 0) {
+        if (result.status === 0) {
           generated.push(`${offerDir}/${docxFile}`);
-          logger.info({ dir: offerDir, file: docxFile }, 'PDF generated (fallback)');
+          logger.info({ dir: offerDir, file: docxFile }, 'PDF generated');
         } else {
           failed.push(`${offerDir}/${docxFile}`);
           logger.warn(
-            { dir: offerDir, file: docxFile, stderr: pdfResult.stderr },
+            { dir: offerDir, file: docxFile, stderr: result.stderr },
             'PDF generation failed',
           );
         }
       }
 
-      const parts: string[] = [];
-      if (alreadyHavePdf > 0) parts.push(`${alreadyHavePdf} PDFs déjà présents`);
-      if (generated.length > 0) parts.push(`${generated.length} PDFs convertis (fallback)`);
-      if (failed.length > 0) parts.push(`${failed.length} échecs`);
-      if (missing.length === 0 && alreadyHavePdf === 0) parts.push('aucun CV trouvé');
-
-      return { result: parts.join(', ') };
+      return {
+        result: `${generated.length} PDFs générés, ${failed.length} échecs`,
+      };
     });
 
     registerHostTask('autoapply_generate_messages', async () => {
-      const offresDir = getOffresDir();
-      const missing: Array<{
-        site: string;
-        profile: string;
-        folder: string;
-        dir: string;
-      }> = [];
+      // Find all offer dirs with CV.docx but no "Message de réponse" in description.md
+      const missing: Array<{ platform: string; slug: string; dir: string }> =
+        [];
 
-      if (!fs.existsSync(offresDir)) {
-        return { result: 'OFFRES directory not found' };
+      if (!fs.existsSync(JOB_REPO_DIR)) {
+        return { result: 'Job repo not found' };
       }
 
-      // Scan RECU and APPLIED for offers with CV but no message
-      for (const site of fs.readdirSync(offresDir)) {
-        if (['queue', '.git'].includes(site) || site.startsWith('.')) continue;
-        const siteDir = path.join(offresDir, site);
-        if (!fs.statSync(siteDir).isDirectory()) continue;
+      for (const platform of fs.readdirSync(JOB_REPO_DIR)) {
+        if (['applied', 'archived', '.git'].includes(platform)) continue;
+        const platformDir = path.join(JOB_REPO_DIR, platform);
+        if (!fs.statSync(platformDir).isDirectory()) continue;
 
-        for (const profile of fs.readdirSync(siteDir)) {
-          const profileDir = path.join(siteDir, profile);
-          if (!fs.statSync(profileDir).isDirectory()) continue;
-
-          for (const status of ['RECU', 'APPLIED']) {
-            const statusDir = path.join(profileDir, status);
-            if (!fs.existsSync(statusDir)) continue;
-
-            for (const folder of fs.readdirSync(statusDir)) {
-              const offerDir = path.join(statusDir, folder);
-              if (!fs.statSync(offerDir).isDirectory()) continue;
-
-              const files = fs.readdirSync(offerDir);
-              const hasCV = files.some(
-                (f) => f.startsWith('CV_') && f.endsWith('.docx'),
-              );
-              const desc = path.join(offerDir, 'DESCRIPTION.md');
-              if (!hasCV || !fs.existsSync(desc)) continue;
-
-              const descContent = fs.readFileSync(desc, 'utf-8');
-              if (!descContent.includes('## Message de réponse')) {
-                missing.push({ site, profile, folder, dir: offerDir });
-              }
-            }
+        for (const slug of fs.readdirSync(platformDir)) {
+          const offerDir = path.join(platformDir, slug);
+          if (!fs.statSync(offerDir).isDirectory()) continue;
+          const docx = path.join(offerDir, 'CV.docx');
+          const desc = path.join(offerDir, 'description.md');
+          if (!fs.existsSync(docx)) continue;
+          if (!fs.existsSync(desc)) continue;
+          const descContent = fs.readFileSync(desc, 'utf-8');
+          if (!descContent.includes('## Message de réponse')) {
+            missing.push({ platform, slug, dir: offerDir });
           }
         }
       }
@@ -576,10 +575,7 @@ Utilise le skill resume-optimizer.`,
       }
 
       const offerList = missing
-        .map(
-          (o) =>
-            `/workspace/extra/freelance-radar/OFFRES/${o.site}/${o.profile}/RECU/${o.folder}`,
-        )
+        .map((o) => `/workspace/extra/freelance-radar/${o.platform}/${o.slug}`)
         .join('\n');
 
       return {
@@ -588,11 +584,11 @@ Utilise le skill resume-optimizer.`,
           prompt: `Tu dois générer un "Message de réponse" pour ${missing.length} offres freelance qui ont un CV adapté mais pas encore de message de prise de contact.
 
 Pour CHAQUE offre dans la liste ci-dessous :
-1. Lis \`RAW.json\` et \`DESCRIPTION.md\`
+1. Lis \`description.md\` et \`context.md\`
 2. Génère un message de réponse personnalisé < 2000 caractères (compte les caractères avant d'écrire)
-3. Appende-le à la fin de \`DESCRIPTION.md\` via :
+3. Appende-le à la fin de \`description.md\` via :
    \`\`\`bash
-   cat >> {offer_dir}/DESCRIPTION.md << 'MSGEOF'
+   cat >> /workspace/extra/freelance-radar/{platform}/{slug}/description.md << 'MSGEOF'
 
 ## Message de réponse
 
@@ -606,7 +602,7 @@ MSGEOF
 
 Le message doit :
 - Être < 2000 caractères (espaces compris)
-- Mentionner le nom de l'entreprise si disponible dans RAW.json
+- Mentionner le nom de l'acheteur/entreprise si disponible dans description.md
 - Citer 2-3 éléments spécifiques de l'offre
 - Mettre en avant les points du profil qui matchent
 - Mentionner la disponibilité et le TJM si pertinent
@@ -624,9 +620,11 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
     });
 
     registerHostTask('autoapply_cleanup', async () => {
-      const expired = archiveExpiredOffers(30);
+      const { markExpiredOffers, purgeOldOffers } =
+        await import('../freelance-db.js');
+      const expired = markExpiredOffers();
       const purged = purgeOldOffers(90);
-      return { result: `${expired} archived, ${purged} purged` };
+      return { result: `${expired} expired, ${purged} purged` };
     });
 
     logger.info('Autoapply host tasks registered');
@@ -637,13 +635,17 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
  * Build a WhatsApp-friendly digest message from scraping results.
  */
 export function buildDigest(resultSummary: string): string | null {
-  const ignoredOffers = lastScrapingResult?.ignoredOffers;
+  // resultSummary format: "17 scraped, 5 new, 5 pertinent"
   const match = resultSummary.match(
-    /(\d+) scraped, (\d+) new, (\d+) pertinent, (\d+) pending, (\d+) already_processed, (\d+) duplicates, (\d+) ignored/,
+    /(\d+) scraped, (\d+) new, (\d+) pertinent/,
   );
   if (!match) return null;
 
-  const [, scraped, newCount, pertinent, pending, alreadyProcessed, duplicates, ignored] = match;
+  const [, scraped, newCount, pertinent] = match;
+
+  // Get the latest offers from DB for the digest
+  const topOffers = getTopOffers(5);
+  if (topOffers.length === 0) return null;
 
   const date = new Date().toLocaleDateString('fr-FR', {
     day: 'numeric',
@@ -652,69 +654,27 @@ export function buildDigest(resultSummary: string): string | null {
   });
 
   let digest = `📋 *Scraping du ${date}*\n\n`;
-  digest += `*Bilan :*\n`;
-  digest += `• ${scraped} offres analysées\n`;
-  digest += `• ${duplicates} doublons ignorés\n`;
-  digest += `• ${ignored} offres rejetées (score insuffisant)\n`;
-  digest += `• ${newCount} nouvelles retenues\n`;
-  digest += `• ${alreadyProcessed} offres déjà traitées (CV existant)\n`;
-  digest += `• ${pending} offres en attente de traitement (Tier 2)\n\n`;
+  digest += `${scraped} offres analysées, ${newCount} nouvelles, ${pertinent} pertinentes\n\n`;
+  digest += `*Top offres :*\n\n`;
 
-  // Top retained offers
-  const recuOffers = getOffersByStatus('RECU');
-  if (recuOffers.length > 0) {
-    const topOffers = recuOffers
-      .sort((a, b) => b.tier1Score - a.tier1Score)
-      .slice(0, 5);
+  for (const offer of topOffers) {
+    const icon =
+      offer.relevanceScore >= 0.6
+        ? '🟢'
+        : offer.relevanceScore >= 0.4
+          ? '🟡'
+          : '🟠';
+    const tjm = offer.tjmMin ? `${offer.tjmMin}–${offer.tjmMax || '?'}€/j` : '';
+    const deadline = offer.deadline ? `⏰ ${offer.deadline.slice(0, 10)}` : '';
 
-    digest += `*Top offres retenues :*\n\n`;
-
-    for (const offer of topOffers) {
-      const icon =
-        offer.tier1Score >= 0.6
-          ? '🟢'
-          : offer.tier1Score >= 0.4
-            ? '🟡'
-            : '🟠';
-      const rate = offer.raw.daily_rate ? `${offer.raw.daily_rate}€/j` : '';
-
-      digest += `${icon} *${offer.raw.title.slice(0, 60)}*\n`;
-      digest += `   [${offer.site}] ${offer.raw.company || ''} ${rate}\n`;
-      digest += `   Score: ${offer.tier1Score.toFixed(2)}\n`;
-      digest += `   ${offer.raw.offer_url}\n\n`;
-    }
-  }
-
-  // Ignored offers summary
-  if (ignoredOffers && ignoredOffers.length > 0) {
-    const hardExcluded = ignoredOffers.filter((o) => o.score === 0);
-    const lowScore = ignoredOffers.filter((o) => o.score !== undefined && o.score > 0);
-
-    if (hardExcluded.length > 0) {
-      digest += `*Offres exclues (hors scope) :*\n`;
-      for (const o of hardExcluded.slice(0, 5)) {
-        digest += `   ❌ ${o.title.slice(0, 50)} [${o.site}]\n`;
-      }
-      if (hardExcluded.length > 5) {
-        digest += `   ... et ${hardExcluded.length - 5} autres\n`;
-      }
-      digest += `\n`;
-    }
-
-    if (lowScore.length > 0) {
-      digest += `*Offres rejetées (score trop bas) :*\n`;
-      for (const o of lowScore.slice(0, 5)) {
-        digest += `   ⚪ ${o.title.slice(0, 50)} — ${o.score!.toFixed(2)} [${o.site}]\n`;
-      }
-      if (lowScore.length > 5) {
-        digest += `   ... et ${lowScore.length - 5} autres\n`;
-      }
-      digest += `\n`;
-    }
+    digest += `${icon} *${offer.title.slice(0, 60)}*\n`;
+    digest += `   [${offer.platform}] ${offer.buyer || ''} ${tjm}\n`;
+    digest += `   Score: ${offer.relevanceScore.toFixed(2)} ${deadline}\n`;
+    digest += `   ${offer.url}\n\n`;
   }
 
   digest += `───────\n`;
-  digest += `📂 Détails dans le repo OFFRES`;
+  digest += `📂 Détails dans le repo freelance-radar`;
 
   return digest;
 }
@@ -723,13 +683,13 @@ export function buildDigest(resultSummary: string): string | null {
  * Test all scrapers and return their health status.
  */
 export async function testAllScrapers(): Promise<
-  Array<{ site: string; name: string; ok: boolean; error?: string }>
+  Array<{ platform: string; name: string; ok: boolean; error?: string }>
 > {
   const results = [];
-  for (const scraper of Object.values(SCRAPERS)) {
+  for (const scraper of SCRAPERS) {
     const test = await scraper.test();
     results.push({
-      site: scraper.site,
+      platform: scraper.platform,
       name: scraper.name,
       ...test,
     });

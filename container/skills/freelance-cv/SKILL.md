@@ -29,29 +29,22 @@ Quand tu es déclenché après le scraping, tu traites TOUTES les offres en atte
 ```
 /workspace/project/data/freelance/profile.json   — Profil professionnel (read-only)
 /workspace/project/data/freelance/CV.docx        — CV source original (read-only)
-/workspace/extra/freelance-radar/OFFRES/                         — Repo des offres (read-write)
-  {site}/
-    {profile}/
-      RECU/
-        {date}_{company}_{title}/   — Offre fraîchement collectée
-          RAW.json                  — Données structurées (source de vérité)
-          DESCRIPTION.md            — Version lisible
-          CV_{COMPANY}.docx         — CV adapté (créé par resume-optimizer)
-          CV_{COMPANY}.pdf          — PDF du CV adapté
-      APPLIED/
-        {date}_{company}_{title}/   — Candidature envoyée
-      ARCHIVED/
-        {date}_{company}_{title}/   — Offre classée (skip, expirée, refusée)
-  registry.json                     — Index de déduplication
-  queue/                            — Files d'attente scraper
+/workspace/extra/freelance-radar/                — Repo des offres (read-write)
+  {platform}/
+    {slug}/              — Offre active
+      description.md     — Détails de l'offre (créé par le host)
+      context.md         — Contexte pour le traitement (status: pending/processed)
+      CV.docx            — CV adapté (créé par resume-optimizer)
+      CV.pdf             — PDF du CV adapté
+  applied/
+    {platform}/
+      {slug}/            — Offre pour laquelle une candidature a été envoyée
+  archived/
+    {platform}/
+      {slug}/            — Offre expirée (publiée > 6 mois) ou abandonnée
 ```
 
-Le cycle de vie d'une offre est un **déplacement de dossier** :
-```
-RECU/  ──>  APPLIED/  ──>  ARCHIVED/
-               │
-               └──────────> ARCHIVED/
-```
+Les dossiers `applied/` et `archived/` sont à la racine du repo et ne sont **jamais scannés** par le pipeline.
 
 ## Étape 1 — Construire la liste de travail
 
@@ -63,18 +56,17 @@ Les chemins des nouvelles offres sont fournis directement par le scraper dans le
 
 ### Mode scan complet (recovery)
 
-Déclenché si l'utilisateur dit : "scan complet", "récupère les offres en attente", "rattrapage", ou équivalent.
+Déclenché si l'utilisateur dit : "scan complet", "récupère les offres en attente", "rattrapage", "check les pending", ou équivalent.
 
-Scanne le repo pour trouver les dossiers dans `RECU/` **qui n'ont pas encore de CV** :
+Scanne l'intégralité du repo pour trouver **tous** les `status: pending` (ajouts manuels, offres ratées suite à un rate limit ou arrêt du process), en excluant explicitement `applied/` et `archived/` :
 
 ```bash
-find /workspace/extra/freelance-radar/OFFRES -path "*/RECU/*/RAW.json" | while read f; do
-  d=$(dirname "$f")
-  ls "$d"/CV*.docx 2>/dev/null | grep -q . || echo "$d"
-done | sort > /tmp/work_list.txt
+grep -rl "status: pending" /workspace/extra/freelance-radar/*/*/context.md \
+  | grep -v '^/workspace/extra/freelance-radar/applied/' \
+  | grep -v '^/workspace/extra/freelance-radar/archived/' \
+  | sed 's|/context.md||' \
+  | sort > /tmp/work_list.txt
 ```
-
-Les offres dans RECU/ qui ont déjà un `CV_*.docx` ou `CV.docx` sont considérées comme déjà traitées et **ignorées**.
 
 ---
 
@@ -101,13 +93,11 @@ Pour CHAQUE chemin dans `/tmp/work_list.txt` (index i de 1 à N) :
 Envoie via `mcp__nanoclaw__send_message` :
 > "⏳ Traitement offre {i}/{N} : {titre de l'offre}..."
 
-### 2b. Lire les données de l'offre
+### 2b. Lire le contexte
 
 ```bash
-cat {offer_dir}/RAW.json
+cat /workspace/extra/freelance-radar/{platform}/{slug}/context.md
 ```
-
-Le RAW.json contient toutes les données structurées : `title`, `company`, `location`, `contract_type`, `daily_rate`, `skills_required`, `description_raw`, etc.
 
 ### 2c. Scoring Tier 2 (sémantique)
 
@@ -128,56 +118,56 @@ Détermine :
 ### 2d. Adapter le CV (si apply ou maybe)
 
 **Délègue au skill `resume-optimizer`** en lui fournissant :
-- Le chemin du RAW.json (contient l'offre structurée)
-- Le chemin de destination du CV : `{offer_dir}/CV_{COMPANY}.docx` (le nom est déterminé à partir du champ `company` de RAW.json)
+- Le chemin du context.md (contient l'offre et le scoring)
+- Le chemin de destination du CV : `/workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx` (le nom exact est déterminé par resume-optimizer à partir du champ Acheteur de description.md)
 
 Le skill `resume-optimizer` s'occupe de copier le CV original, l'adapter et le sauvegarder.
 
 **Ajoute le chemin du dossier à la liste de session** (pour la génération PDF en batch) :
 
 ```bash
-echo "{offer_dir}" >> /tmp/cv_session_paths.txt
+echo "/workspace/extra/freelance-radar/{platform}/{slug}" >> /tmp/cv_session_paths.txt
 ```
 
-### 2e. Si skip — écrire cause.md puis déplacer vers ARCHIVED
+### 2e. Mettre à jour le context.md
 
-Pour les offres avec recommendation `skip`, **d'abord** écrire un fichier `cause.md` expliquant précisément pourquoi l'offre est écartée, **puis** déplacer vers ARCHIVED :
+Remplace le contenu avec les résultats :
 
-```bash
-cat > {offer_dir}/cause.md << 'CAUSEEOF'
-# Cause d'archivage
+```markdown
+---
+status: processed
+platform: {platform}
+slug: {slug}
+tier1Score: {score}
+tier2Score: {tier2Score}
+recommendation: {apply|maybe|skip}
+processedAt: {date ISO}
+cvGenerated: {true|false}
+---
 
-**Type** : skip (scoring Tier 2)
-**Score Tier 2** : {tier2Score}
-**Date** : {date ISO}
+# Analyse Tier 2
 
-## Raison détaillée
+## Recommendation : {apply|maybe|skip}
 
-{reasoning détaillé et précis — les éléments exacts qui ont conduit au rejet :
-stack incompatible, séniorité inadéquate, localisation hors scope, TJM insuffisant, etc.}
+{reasoning}
 
 ## Compétences matchées
-{matchedSkills ou "Aucune"}
+{matchedSkills}
 
 ## Compétences manquantes
 {missingSkills}
-CAUSEEOF
-```
 
-Ensuite déplacer vers ARCHIVED :
-
-```bash
-# Déterminer le chemin ARCHIVED (même {site}/{profile}/, juste remplacer RECU par ARCHIVED)
-ARCHIVED_DIR=$(echo "{offer_dir}" | sed 's|/RECU/|/ARCHIVED/|')
-mkdir -p "$(dirname "$ARCHIVED_DIR")"
-mv "{offer_dir}" "$ARCHIVED_DIR"
+## Adaptations CV
+{ce qui a été modifié dans le CV et pourquoi — rempli par resume-optimizer}
 ```
 
 ## Étape 3 — Génération PDF en batch
 
-Après avoir traité **toutes** les offres de la session, génère les PDFs en une seule passe.
+Après avoir traité **toutes** les offres de la session, génère les PDFs en une seule passe pour les CVs créés durant cette session uniquement (pas les CVs déjà présents dans le repo d'une session précédente).
 
-La génération PDF s'effectue **côté host** via une tâche IPC :
+La génération PDF s'effectue **côté host** via une tâche IPC (le container agent n'a pas accès à Docker).
+
+Écris le fichier IPC suivant pour déclencher la génération :
 
 ```bash
 cat > /workspace/ipc/tasks/generate_pdfs_$(date +%s).json << 'EOF'
@@ -188,17 +178,27 @@ cat > /workspace/ipc/tasks/generate_pdfs_$(date +%s).json << 'EOF'
 EOF
 ```
 
-Le host détecte automatiquement tous les `CV_*.docx` sans PDF correspondant dans RECU/ et APPLIED/ et génère les PDFs via le container `docx2pdf`.
+Le host détecte automatiquement tous les `CV.docx` sans `CV.pdf` correspondant dans `freelance-radar/` (hors `applied/` et `archived/`) et génère les PDFs via le container `docx2pdf`.
 
-## Nettoyage des fichiers temporaires de session
-
+# Nettoyage des fichiers temporaires de session
 ```bash
 rm -f /tmp/cv_session_paths.txt /tmp/work_list.txt
 ```
 
-## Étape 5 — Commit git
+## Étape 5 — Nettoyage du repo
 
-Après avoir traité toutes les offres (les skips sont déjà déplacés vers ARCHIVED) :
+Le repo freelance-radar ne doit contenir **QUE les offres pour lesquelles un CV a été généré**.
+
+Après avoir traité toutes les offres :
+
+1. **Supprimer les dossiers des offres "skip"** (celles sans CV généré) :
+
+```bash
+# Pour chaque offre ayant reçu recommendation: skip
+rm -rf /workspace/extra/freelance-radar/{platform}/{slug}/
+```
+
+2. **Commit git** (les offres retenues s'accumulent dans le repo) :
 
 ```bash
 cd /workspace/extra/freelance-radar
@@ -208,25 +208,25 @@ git commit -m "feat: nouvelles offres — $(date +%Y-%m-%d)" || true
 
 ## Étape 6 — Digest final
 
-Après le commit, envoie via `mcp__nanoclaw__send_message` :
+Après le nettoyage et le commit, envoie via `mcp__nanoclaw__send_message` :
 
 ```
 📋 *Traitement terminé* ({date})
 
 {N} offres analysées, {nb_cv} CV générés :
 
-🟢 *{titre}* — {site}/{profile}
+🟢 *{titre}* — {plateforme}
    Score Tier 2: {score} | CV généré ✅
    {reasoning court}
 
-🟡 *{titre}* — {site}/{profile}
+🟡 *{titre}* — {plateforme}
    Score Tier 2: {score} | CV généré ✅
 
-🔴 *{titre}* — {site}/{profile}
-   Score Tier 2: {score} | Ignorée (skip) — déplacée vers ARCHIVED
+🔴 *{titre}* — {plateforme}
+   Score Tier 2: {score} | Ignorée (skip) — supprimée du repo
 
 ───────
-📂 CV et analyses dans OFFRES/
+📂 CV et analyses dans freelance-radar
 ✅ Traitement terminé — plus aucune tâche en cours.
 ```
 
@@ -234,61 +234,58 @@ Après le commit, envoie via `mcp__nanoclaw__send_message` :
 
 ### Déclenchement
 
-Déclenché si l'utilisateur dit : "j'ai postulé", "marque comme postulé {offre}", "archive les expirées", "nettoie les vieilles offres", ou équivalent.
+Déclenché si l'utilisateur dit : "j'ai postulé", "archive les expirées", "marque comme postulé {slug}", "nettoie les vieilles offres", ou équivalent.
 
 ### Candidature envoyée (manuel ou sur demande)
 
-Déplace le dossier de l'offre de RECU/ vers APPLIED/ :
+Déplace le dossier de l'offre dans `applied/{platform}/` à la racine du repo :
 
 ```bash
-# offer_dir = /workspace/extra/freelance-radar/OFFRES/{site}/{profile}/RECU/{folder}
-APPLIED_DIR=$(echo "{offer_dir}" | sed 's|/RECU/|/APPLIED/|')
-mkdir -p "$(dirname "$APPLIED_DIR")"
-mv "{offer_dir}" "$APPLIED_DIR"
+mkdir -p /workspace/extra/freelance-radar/applied/{platform}/
+mv /workspace/extra/freelance-radar/{platform}/{slug}/ \
+   /workspace/extra/freelance-radar/applied/{platform}/{slug}/
 ```
 
 ### Archivage automatique des offres expirées
 
-Une offre est expirée si : `collected_at` + 6 mois < aujourd'hui.
+Une offre est expirée si : **date de publication + 6 mois < aujourd'hui**.
 
-La date de collecte est dans `RAW.json`, champ `collected_at` :
+La date de publication est dans `description.md`, champ `**Publiée**` :
 
 ```bash
 python3 << 'EOF'
-import json, shutil
+import re, shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
-offres = Path("/workspace/extra/freelance-radar/OFFRES")
+radar = Path("/workspace/extra/freelance-radar")
 today = datetime.today()
 threshold = timedelta(days=183)  # ~6 mois
 archived = []
 
-for raw_file in offres.glob("*/*/RECU/*/RAW.json"):
-    offer_dir = raw_file.parent
-    try:
-        data = json.loads(raw_file.read_text())
-        collected = datetime.fromisoformat(data["collected_at"].replace("Z", "+00:00")).replace(tzinfo=None)
-        if today - collected > threshold:
-            # Écrire cause.md avant de déplacer
-            cause = f"""# Cause d'archivage
+# Ne scanner que {platform}/{slug}/ — exclure applied/ et archived/
+excluded = {"applied", "archived"}
 
-**Type** : expiration automatique
-**Date** : {today.isoformat()}
-
-## Raison détaillée
-
-Offre collectée le {collected.strftime('%Y-%m-%d')}, soit plus de 6 mois.
-Archivée automatiquement car dépassant le seuil de rétention (183 jours).
-"""
-            (offer_dir / "cause.md").write_text(cause)
-
-            archived_dir = str(offer_dir).replace("/RECU/", "/ARCHIVED/")
-            Path(archived_dir).parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(offer_dir), archived_dir)
-            archived.append(offer_dir.name)
-    except (json.JSONDecodeError, KeyError, ValueError):
+for context in radar.glob("*/*/context.md"):
+    platform = context.parts[-3]
+    slug = context.parts[-2]
+    if platform in excluded:
         continue
+
+    desc = context.parent / "description.md"
+    if not desc.exists():
+        continue
+
+    match = re.search(r'\|\s*\*\*Publiée\*\*\s*\|\s*(\d{4}-\d{2}-\d{2})', desc.read_text())
+    if not match:
+        continue
+
+    pub_date = datetime.strptime(match.group(1), "%Y-%m-%d")
+    if today - pub_date > threshold:
+        dest = radar / "archived" / platform / slug
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(context.parent), str(dest))
+        archived.append(f"{platform}/{slug}")
 
 print(f"Archivées : {len(archived)}")
 for a in archived:
@@ -306,11 +303,10 @@ git commit -m "chore: archive offres expirées / postulées — $(date +%Y-%m-%d
 
 ## Règles
 
-- **TOUJOURS traiter TOUTES les offres dans RECU/** — ne jamais s'arrêter après une seule
+- **TOUJOURS traiter TOUTES les offres pending** — ne jamais s'arrêter après une seule
 - **Envoyer la progression** à chaque offre (i/N) via MCP
 - **Déléguer la génération CV** au skill resume-optimizer
 - **Ne pas postuler** automatiquement — l'utilisateur valide
-- **Ne jamais deplacer** une offre qui n'as pas de fichier d'explication lié cause.md 
-- **Déplacer vers ARCHIVED** les offres "skip" — seules les offres avec CV restent dans RECU
-- **Ne jamais scanner** `ARCHIVED/` — ce dossier est hors scope du pipeline
-- **Git commit** après le traitement — les offres s'accumulent entre les runs
+- **Supprimer du repo** les offres "skip" — seules les offres avec CV restent
+- **Ne jamais scanner** `applied/` et `archived/` — ces dossiers sont hors scope
+- **Git commit** après le nettoyage ou l'archivage — les offres s'accumulent entre les runs

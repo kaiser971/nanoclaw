@@ -11,14 +11,13 @@ Adapte et optimise les CV pour des offres freelance, CDI, ou appels d'offre publ
 
 - **Profil source de vérité** : `/workspace/project/data/freelance/profile.json`
 - **CV original** : `/workspace/project/data/freelance/CV.docx`
-- **Offres** : `/workspace/extra/freelance-radar/OFFRES/{site}/{profile}/RECU/{folder}/RAW.json`
-- **CV générés** : `/workspace/extra/freelance-radar/OFFRES/{site}/{profile}/RECU/{folder}/CV_{COMPANY}.docx`
+- **CV générés** : `/workspace/extra/freelance-radar/{platform}/{slug}/CV.docx`
 
 ## Règle critique
 
 **TOUJOURS copier le CV original avant de le modifier** :
 ```bash
-cp /workspace/project/data/freelance/CV.docx {offer_dir}/CV_{COMPANY}.docx
+cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{platform}/{slug}/CV.docx
 ```
 Puis modifier la copie avec python-docx. Ne jamais générer un document from scratch — le formatage, les polices, les marges et la mise en page du Word original doivent être intégralement préservés.
 
@@ -26,14 +25,9 @@ Puis modifier la copie avec python-docx. Ne jamais générer un document from sc
 
 ### 1. Analyse de l'offre cible
 
-Lire les données structurées depuis `RAW.json` :
-```bash
-cat {offer_dir}/RAW.json
-```
-
-Extraire :
-- **Compétences clés** : `skills_required` + compétences implicites dans `description_raw`
-- **Niveau de séniorité** : depuis `experience_years` et indices dans le titre/description
+Avant toute adaptation, extraire :
+- **Compétences clés** : techniques explicites ET implicites dans la description
+- **Niveau de séniorité** : junior, confirmé, senior, lead, architect
 - **Contexte métier** : secteur (public/privé), taille (startup/grand groupe), méthodologie
 - **Mots-clés récurrents** : termes que l'ATS ou le recruteur cherchera
 - **Red flags** : incompatibilités évidentes avec le profil
@@ -59,16 +53,14 @@ Extraire :
 
 ### 3. Règles par type d'offre
 
-Le type de contrat est dans `RAW.json > contract_type`.
-
-#### Freelance (`contract_type: "Freelance"`)
+#### Freelance (ESN, plateformes)
 
 - Style dynamique, orienté résultats
 - Mettre en avant : autonomie, TJM, disponibilité
 - Bullet points chiffrés : "Migration Symfony 4→6 pour 200K users"
 - Compétences techniques en premier
 
-#### Appels d'offre publics (source_site: "boamp")
+#### Appels d'offre publics (BOAMP, PLACE)
 
 - Style formel, vocabulaire administratif
 - Mettre en avant : expériences secteur public, conformité, méthodologie
@@ -76,7 +68,7 @@ Le type de contrat est dans `RAW.json > contract_type`.
 - Mentionner : gestion de projet, pilotage, coordination
 - Structurer en "compétences requises par le cahier des charges"
 
-#### CDI / Recrutement (`contract_type: "CDI"`)
+#### CDI / Recrutement (Michael Page, Externatic)
 
 - Style équilibré entre technique et soft skills
 - Mettre en avant : stabilité, évolution, leadership
@@ -93,19 +85,19 @@ Les CV passent souvent par un ATS (Applicant Tracking System). Optimiser :
 
 ### 5. Génération du fichier
 
-**Nom du fichier : `CV_{COMPANY}.docx`**
+**Nom du fichier : `CV_{ACHETEUR}.docx`**
 
-Extraire le nom de l'entreprise depuis `RAW.json` (champ `company`).
+Extraire le nom de l'acheteur depuis `description.md` (champ `| **Acheteur** | ... |`).
 Sanitizer pour le nom de fichier : espaces → `_`, garder uniquement `[A-Za-z0-9_\-]`.
-Si `company` est `null` ou vide → utiliser `CV.docx` comme fallback.
+Si l'acheteur est `—` ou vide → utiliser `CV.docx` comme fallback.
 
-Exemples : `"Gorgias"` → `CV_Gorgias.docx` | `"France Télévisions"` → `CV_France_Televisions.docx`
+Exemples : `1G-LINK CONSULTING` → `CV_1G-LINK_CONSULTING.docx` | `Ministère de l'Intérieur` → `CV_Ministere_de_lInterieur.docx`
 
 **OBLIGATOIRE — Suivre ces 2 étapes EXACTEMENT dans cet ordre :**
 
 **Étape A** — Copier l'original (OBLIGATOIRE, ne jamais sauter cette étape) :
 ```bash
-cp /workspace/project/data/freelance/CV.docx {offer_dir}/CV_{COMPANY}.docx
+cp /workspace/project/data/freelance/CV.docx /workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx
 ```
 
 **Étape B** — Modifier UNIQUEMENT le texte de la copie avec python-docx :
@@ -113,7 +105,7 @@ cp /workspace/project/data/freelance/CV.docx {offer_dir}/CV_{COMPANY}.docx
 python3 << 'PYSCRIPT'
 from docx import Document
 
-cv_path = "{offer_dir}/CV_{COMPANY}.docx"
+cv_path = "/workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx"
 doc = Document(cv_path)
 
 # Parcourir les cellules des tableaux existants
@@ -138,23 +130,25 @@ PYSCRIPT
 
 **Le fichier de sortie DOIT être visuellement identique à l'original** (même mise en page, polices, couleurs, marges). Seul le contenu textuel change.
 
+Chemin de sortie : `/workspace/extra/freelance-radar/{platform}/{slug}/CV_{ACHETEUR}.docx`
+
 ### 6. Message de réponse
 
-Après avoir généré le CV, **ajouter une section "Message de réponse"** à la fin du `DESCRIPTION.md` de l'offre.
+Après avoir généré le CV, **ajouter une section "Message de réponse"** à la fin du `description.md` de l'offre.
 
 Ce message est la prise de contact initiale (email, formulaire, message direct) que Jean-Luc enverra au recruteur. Il doit :
 
 - Être **strictement inférieur à 2000 caractères** (espaces compris)
-- Être **personnalisé** : utiliser le nom de l'entreprise (depuis `RAW.json > company`), mentionner 2-3 éléments spécifiques de l'offre
+- Être **personnalisé** : utiliser le nom de l'acheteur/entreprise si disponible, mentionner 2-3 éléments spécifiques de l'offre
 - Mettre en avant **les points forts du profil qui matchent cette offre précisément**
 - Mentionner la disponibilité et le TJM si pertinent
 - Ton professionnel, direct, sans formules creuses
-- **Ne jamais citer mot pour mot l'intitulé du poste** — utiliser des formulations naturelles
+- **Ne jamais citer mot pour mot l'intitulé du poste** — utiliser des formulations naturelles comme "le poste de...", "l'offre de...", "la mission de...", "votre offre", "cette mission". Écrire comme un professionnel qui répond spontanément, pas comme un système automatisé.
 
-Ajoute la section en fin de `DESCRIPTION.md` :
+Ajoute la section en fin de `description.md` :
 
 ```bash
-cat >> {offer_dir}/DESCRIPTION.md << 'MSGEOF'
+cat >> /workspace/extra/freelance-radar/{platform}/{slug}/description.md << 'MSGEOF'
 
 ## Message de réponse
 
@@ -172,7 +166,7 @@ MSGEOF
 Pour chaque CV généré, produire un résumé :
 
 ```
-## Adaptations pour [titre offre] ([site])
+## Adaptations pour [titre offre] ([plateforme])
 
 **Score de pertinence** : 0.82
 **Recommandation** : apply
