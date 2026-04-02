@@ -29,6 +29,14 @@ export interface IpcDeps {
     prompt: string,
     groupFolder: string,
   ) => void;
+  /** Optional: custom handler for run_host_task IPC (used by autoapply module). */
+  onRunHostTask?: (
+    data: { taskId?: string },
+    sourceGroup: string,
+    isMain: boolean,
+    sendMessage: (jid: string, text: string) => Promise<void>,
+    registeredGroups: () => Record<string, RegisteredGroup>,
+  ) => Promise<void>;
 }
 
 let ipcWatcherRunning = false;
@@ -404,126 +412,19 @@ export async function processTaskIpc(
       break;
 
     case 'run_host_task':
-      // Run a registered host-side function immediately (no scheduler delay).
-      // Main group only. Used for on-demand scraping from WhatsApp.
-      if (!isMain) {
-        logger.warn(
-          { sourceGroup },
-          'Unauthorized run_host_task attempt blocked',
+      // Delegate to autoapply module handler if available, otherwise fallback.
+      if (deps.onRunHostTask) {
+        await deps.onRunHostTask(
+          data,
+          sourceGroup,
+          isMain,
+          deps.sendMessage,
+          deps.registeredGroups,
         );
-        break;
-      }
-      if (data.taskId) {
+      } else if (isMain && data.taskId) {
         const { getHostTask } = await import('./task-scheduler.js');
         const fn = getHostTask(data.taskId);
-        if (!fn) {
-          logger.warn(
-            { taskId: data.taskId },
-            'Unknown host task requested via IPC',
-          );
-          break;
-        }
-        logger.info(
-          { taskId: data.taskId, sourceGroup },
-          'Running host task via IPC',
-        );
-        const startTime = Date.now();
-        try {
-          const { result, triggerContainer } = await fn();
-          logger.info(
-            { taskId: data.taskId, durationMs: Date.now() - startTime, result },
-            'Host task completed via IPC',
-          );
-
-          // Resolve chatJid for this group (needed for all notifications)
-          const chatJid = Object.entries(deps.registeredGroups()).find(
-            ([, g]) => g.folder === sourceGroup,
-          )?.[0];
-
-          // Trigger follow-up container for Tier 2 scoring + CV generation
-          if (triggerContainer) {
-            logger.info(
-              {
-                taskId: data.taskId,
-                promptLength: triggerContainer.prompt.length,
-              },
-              '[AUTOAPPLY] Preparing follow-up container',
-            );
-            if (chatJid) {
-              // Send quick digest first
-              const { buildDigest } =
-                await import('./scrapers/orchestrator.js');
-              const digest = buildDigest(result);
-              if (digest) {
-                logger.info(
-                  { digestLength: digest.length },
-                  '[AUTOAPPLY] Sending digest to user',
-                );
-                await deps.sendMessage(chatJid, digest);
-              } else {
-                logger.warn('[AUTOAPPLY] buildDigest returned null');
-              }
-
-              // Extract pending count from result for notification
-              const pendingMatch = result.match(/(\d+) pending/);
-              const pendingCount = pendingMatch ? pendingMatch[1] : '?';
-
-              // Notify phase 2 start
-              await deps.sendMessage(
-                chatJid,
-                `🔄 *Phase 2* : scoring sémantique de ${pendingCount} offres en cours...`,
-              );
-
-              // Then trigger container for Tier 2 + CV
-              if (deps.enqueueContainerRun) {
-                logger.info(
-                  {
-                    chatJid,
-                    sourceGroup,
-                    promptLength: triggerContainer.prompt.length,
-                  },
-                  '[AUTOAPPLY] Enqueuing container for Tier 2 + CV',
-                );
-                deps.enqueueContainerRun(
-                  chatJid,
-                  triggerContainer.prompt,
-                  sourceGroup,
-                );
-              } else {
-                logger.warn('[AUTOAPPLY] enqueueContainerRun not available');
-              }
-            } else {
-              logger.warn(
-                { sourceGroup },
-                '[AUTOAPPLY] No chatJid found for group',
-              );
-            }
-          } else {
-            logger.info(
-              { taskId: data.taskId },
-              '[AUTOAPPLY] No pending offers, skipping Tier 2',
-            );
-            if (chatJid) {
-              // Send digest even when no Tier 2 needed
-              const { buildDigest } =
-                await import('./scrapers/orchestrator.js');
-              const digest = buildDigest(result);
-              if (digest) {
-                await deps.sendMessage(chatJid, digest);
-              }
-              await deps.sendMessage(
-                chatJid,
-                `✅ Aucune offre en attente — pas de phase 2 nécessaire.`,
-              );
-            }
-          }
-        } catch (err) {
-          const error = err instanceof Error ? err.message : String(err);
-          logger.error(
-            { taskId: data.taskId, error },
-            'Host task failed via IPC',
-          );
-        }
+        if (fn) await fn();
       }
       break;
 

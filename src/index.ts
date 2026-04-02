@@ -61,7 +61,7 @@ import {
   handleSessionCommand,
   isSessionCommandAllowed,
 } from './session-commands.js';
-import { registerAutoapplyTasks } from './scrapers/orchestrator.js';
+import { registerAutoapply } from './autoapply/index.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -666,8 +666,36 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Register Autoapply host-side tasks (scraping, cleanup)
-  registerAutoapplyTasks();
+  // Register Autoapply module (scraping, scoring, CV, PDF pipeline)
+  const { registerHostTask, getHostTask } = await import(
+    './task-scheduler.js'
+  );
+  const autoapply = registerAutoapply({
+    sendMessage: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel) await channel.sendMessage(jid, text);
+    },
+    registerHostTask,
+    getHostTask,
+    enqueueTask: (chatJid, taskId, fn) =>
+      queue.enqueueTask(chatJid, taskId, fn),
+    closeStdin: (chatJid) => queue.closeStdin(chatJid),
+    runContainerAgent,
+    registeredGroups: () => registeredGroups,
+    getSession: (gf) => sessions[gf],
+    setSession: (gf, sid) => {
+      sessions[gf] = sid;
+      setSession(gf, sid);
+    },
+    formatOutbound,
+    registerProcess: (chatJid, proc, containerName, groupFolder) =>
+      queue.registerProcess(chatJid, proc, containerName, groupFolder),
+    assistantName: ASSISTANT_NAME,
+    findChannelAndSend: async (jid, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel) await channel.sendMessage(jid, text);
+    },
+  });
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
@@ -719,146 +747,8 @@ async function main(): Promise<void> {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
       }
     },
-    enqueueContainerRun: (chatJid, prompt, groupFolder) => {
-      logger.info(
-        { chatJid, groupFolder, promptLength: prompt.length },
-        '[AUTOAPPLY] enqueueContainerRun called',
-      );
-      const group = Object.values(registeredGroups).find(
-        (g) => g.folder === groupFolder,
-      );
-      if (!group) {
-        logger.warn(
-          { groupFolder },
-          '[AUTOAPPLY] Cannot enqueue container: group not found',
-        );
-        return;
-      }
-      const isMain = group.isMain === true;
-      const runContainer = async (containerPrompt: string): Promise<void> => {
-        const output = await runContainerAgent(
-          group,
-          {
-            prompt: containerPrompt,
-            sessionId: sessions[groupFolder],
-            groupFolder,
-            chatJid,
-            isMain,
-            isScheduledTask: true,
-            assistantName: ASSISTANT_NAME,
-          },
-          (proc, containerName) =>
-            queue.registerProcess(chatJid, proc, containerName, groupFolder),
-          async (streamedOutput: ContainerOutput) => {
-            if (streamedOutput.result) {
-              const channel = findChannel(channels, chatJid);
-              if (channel) {
-                const text = formatOutbound(streamedOutput.result);
-                if (text) await channel.sendMessage(chatJid, text);
-              }
-            }
-            if (streamedOutput.status === 'success') {
-              // Pipeline tasks: close stdin immediately, don't wait 30min idle
-              queue.closeStdin(chatJid);
-            }
-          },
-        );
-        if (output.newSessionId) {
-          sessions[groupFolder] = output.newSessionId;
-          setSession(groupFolder, output.newSessionId);
-        }
-      };
-
-      const sendMsg = async (text: string) => {
-        const channel = findChannel(channels, chatJid);
-        if (channel) await channel.sendMessage(chatJid, text);
-      };
-
-      queue.enqueueTask(
-        chatJid,
-        `autoapply-pipeline-${Date.now()}`,
-        async () => {
-          const { getHostTask } = await import('./task-scheduler.js');
-          const { processScoringResults, getScoredWithoutCV, getOfferStats } =
-            await import('./offer-store.js');
-
-          // --- Phase 2a: Scoring Tier 2 (container writes SCORING.json only) ---
-          logger.info('[AUTOAPPLY] Phase 2a: Scoring');
-          await runContainer(prompt);
-
-          // --- Post-scoring: host processes results (deterministic) ---
-          logger.info('[AUTOAPPLY] Processing scoring results (host-side)');
-          const bilan = processScoringResults();
-
-          const totalToGenerate = getScoredWithoutCV().length;
-
-          await sendMsg(
-            `📊 *Bilan scoring Tier 2*\n\n` +
-              `• ${bilan.apply} offres "apply"\n` +
-              `• ${bilan.maybe} offres "maybe"\n` +
-              `• ${bilan.skip} archivées (skip) avec cause.md\n` +
-              `• ${bilan.unscored} non scorées (SCORING.json manquant)\n` +
-              `• ${totalToGenerate} CV à générer` +
-              (bilan.errors.length > 0
-                ? `\n• ${bilan.errors.length} erreurs`
-                : ''),
-          );
-
-          if (totalToGenerate === 0) {
-            logger.info(
-              '[AUTOAPPLY] No offers to generate CV for, stopping pipeline',
-            );
-            await sendMsg(`✅ *Pipeline terminé* — aucun CV à générer.`);
-            return;
-          }
-
-          // --- Phase 2b: CV generation ---
-          const cvTask = getHostTask('autoapply_cv_generation');
-          if (cvTask) {
-            const cvResult = await cvTask();
-            logger.info(
-              { result: cvResult.result },
-              '[AUTOAPPLY] CV generation check',
-            );
-
-            if (cvResult.triggerContainer) {
-              await sendMsg(
-                `✏️ *Génération CV* : ${totalToGenerate} CV à adapter...`,
-              );
-              logger.info('[AUTOAPPLY] Phase 2b: CV generation');
-              await runContainer(cvResult.triggerContainer.prompt);
-              await sendMsg(`✅ Génération CV terminée.`);
-            }
-          }
-
-          // --- Phase 3: PDF generation ---
-          const pdfTask = getHostTask('autoapply_generate_pdfs');
-          if (pdfTask) {
-            logger.info('[AUTOAPPLY] Phase 3: PDF generation');
-            const pdfResult = await pdfTask();
-            logger.info(
-              { result: pdfResult.result },
-              '[AUTOAPPLY] PDF generation completed',
-            );
-            await sendMsg(`📄 ${pdfResult.result}`);
-          }
-
-          // --- Final summary ---
-          const stats = getOfferStats();
-          await sendMsg(
-            `✅ *Pipeline terminé*\n\n` +
-              `• ${stats.recu} offres en attente\n` +
-              `• ${stats.applied} candidatures\n` +
-              `• ${stats.archived} archivées\n` +
-              `• ${stats.total} total`,
-          );
-        },
-      );
-      logger.info(
-        { chatJid, groupFolder },
-        'Autoapply pipeline enqueued (scoring → CV → PDF)',
-      );
-    },
+    enqueueContainerRun: autoapply.enqueueContainerRun,
+    onRunHostTask: autoapply.handleRunHostTask,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
