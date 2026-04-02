@@ -464,6 +464,16 @@ export async function processTaskIpc(
                 logger.warn('[AUTOAPPLY] buildDigest returned null');
               }
 
+              // Extract pending count from result for notification
+              const pendingMatch = result.match(/(\d+) pending/);
+              const pendingCount = pendingMatch ? pendingMatch[1] : '?';
+
+              // Notify phase 2 start
+              await deps.sendMessage(
+                chatJid,
+                `🔄 *Phase 2* : scoring sémantique de ${pendingCount} offres en cours...`,
+              );
+
               // Then trigger container for Tier 2 + CV
               if (deps.enqueueContainerRun) {
                 logger.info(
@@ -491,18 +501,19 @@ export async function processTaskIpc(
           } else {
             logger.info(
               { taskId: data.taskId },
-              '[AUTOAPPLY] No pertinent offers, skipping container',
+              '[AUTOAPPLY] No pending offers, skipping Tier 2',
             );
-            // Notify user even when no pertinent offers found
             if (chatJid) {
-              const date = new Date().toLocaleDateString('fr-FR', {
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-              });
+              // Send digest even when no Tier 2 needed
+              const { buildDigest } =
+                await import('./scrapers/orchestrator.js');
+              const digest = buildDigest(result);
+              if (digest) {
+                await deps.sendMessage(chatJid, digest);
+              }
               await deps.sendMessage(
                 chatJid,
-                `📋 *Scraping du ${date}*\n\n${result}\n\nAucune nouvelle offre pertinente trouvée.`,
+                `✅ Aucune offre en attente — pas de phase 2 nécessaire.`,
               );
             }
           }
