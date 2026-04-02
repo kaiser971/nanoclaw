@@ -66,39 +66,6 @@ export const FREELANCE_SEARCH_TERMS = [
   'Maintenance applicative',
 ];
 
-/** Search profiles — each profile defines terms and target sites. */
-export interface SearchProfile {
-  name: string;
-  searchTerms: string[];
-  sites: string[];
-}
-
-export const SEARCH_PROFILES: SearchProfile[] = [
-  {
-    name: 'lead_dev',
-    searchTerms: [
-      'Lead Dev PHP',
-      'Tech Lead PHP',
-      'Chef de projet web',
-      'Architecte PHP',
-    ],
-    sites: ['free-work'],
-  },
-  {
-    name: 'php',
-    searchTerms: [
-      'PHP Symfony',
-      'PHP Laravel',
-      'Développeur PHP',
-      'Full Stack PHP',
-      'Symfony développeur',
-      'TMA applicative',
-      'Maintenance applicative',
-    ],
-    sites: ['free-work'],
-  },
-];
-
 /**
  * Title fragments that hard-reject an offer before scoring.
  * Used to filter categories that consistently produce false positives
@@ -136,7 +103,7 @@ export const RATE_LIMITS = {
   REQUEST_TIMEOUT: 30_000,
   MAX_RESULTS_PER_SCRAPER: 200,
   /** Stop scraping once this many NEW (non-duplicate) offers are found per scraper. */
-  MAX_NEW_RESULTS: parseInt(process.env.AUTOAPPLY_MAX_NEW_RESULTS || '50', 10),
+  MAX_NEW_RESULTS: parseInt(process.env.AUTOAPPLY_MAX_NEW_RESULTS || '100', 10),
 } as const;
 
 // --- BOAMP API ---

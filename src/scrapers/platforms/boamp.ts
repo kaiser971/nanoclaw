@@ -5,14 +5,13 @@
  */
 
 import { logger } from '../../logger.js';
-import { computeFingerprint } from '../../offer-store.js';
 import {
   ALL_SEARCH_TERMS,
   BOAMP_CONFIG,
   HTTP_CONFIG,
   RATE_LIMITS,
 } from '../config.js';
-import type { RawOffer, Scraper, ScraperRunConfig } from '../types.js';
+import type { ScrapedOffer, Scraper, ScraperRunConfig } from '../types.js';
 
 interface BoampRecord {
   idweb?: string;
@@ -45,46 +44,21 @@ function extractSkills(record: BoampRecord): string[] {
     .filter(Boolean);
 }
 
-function mapToOffer(
-  record: BoampRecord,
-  searchProfile: string,
-): RawOffer | null {
+function mapToOffer(record: BoampRecord): ScrapedOffer | null {
   if (!record.idweb || !record.objet) return null;
 
-  const offerUrl = BOAMP_CONFIG.NOTICE_URL_TEMPLATE.replace(
-    '{idweb}',
-    record.idweb,
-  );
-  const company = record.nomacheteur || null;
-
   return {
-    source_site: 'boamp',
-    search_profile: searchProfile,
-    offer_url: offerUrl,
-    apply_url: offerUrl,
-    collected_at: new Date().toISOString(),
-    fingerprint: computeFingerprint(
-      record.objet,
-      company,
-      null,
-      'Unknown',
-    ),
+    platform: 'boamp',
+    platformId: record.idweb,
     title: record.objet,
-    company,
-    requester: null,
-    intermediary: null,
-    location: null,
-    remote_policy: 'unknown',
-    contract_type: 'Unknown',
-    salary_min: null,
-    salary_max: null,
-    daily_rate: null,
-    currency: 'EUR',
-    team_size: null,
-    experience_years: null,
-    skills_required: extractSkills(record),
-    skills_optional: [],
-    description_raw: '',
+    buyer: record.nomacheteur,
+    location: undefined, // Extracted from XML donnees if needed
+    skills: extractSkills(record),
+    offerType: 'appel-offre',
+    url: BOAMP_CONFIG.NOTICE_URL_TEMPLATE.replace('{idweb}', record.idweb),
+    deadline: record.datelimitereponse,
+    datePublished: record.dateparution,
+    rawData: record as Record<string, unknown>,
   };
 }
 
@@ -125,11 +99,11 @@ async function fetchPage(
 }
 
 export const boampScraper: Scraper = {
-  site: 'boamp',
+  platform: 'boamp',
   name: 'BOAMP (Marchés publics)',
 
-  async scrape(config: ScraperRunConfig): Promise<RawOffer[]> {
-    const offers: RawOffer[] = [];
+  async scrape(config: ScraperRunConfig): Promise<ScrapedOffer[]> {
+    const offers: ScrapedOffer[] = [];
     const pageSize = BOAMP_CONFIG.MAX_RESULTS;
     const terms =
       config.searchTerms.length > 0 ? config.searchTerms : ALL_SEARCH_TERMS;
@@ -151,7 +125,7 @@ export const boampScraper: Scraper = {
         );
 
         for (const record of records) {
-          const offer = mapToOffer(record, config.searchProfile);
+          const offer = mapToOffer(record);
           if (offer) offers.push(offer);
         }
 
@@ -188,7 +162,7 @@ export const boampScraper: Scraper = {
       if (totalCount === 0 || records.length === 0) {
         return { ok: false, error: 'No results from BOAMP API' };
       }
-      const offer = mapToOffer(records[0], 'default');
+      const offer = mapToOffer(records[0]);
       if (!offer) {
         return { ok: false, error: 'Failed to map BOAMP record to offer' };
       }
