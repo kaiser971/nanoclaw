@@ -1,48 +1,97 @@
-/** Scraper interfaces for the Autoapply freelance offer system. */
+/** Type definitions for the Autoapply offer system (OFFRES/ architecture). */
 
-export interface ScrapedOffer {
-  platform: string;
-  platformId: string;
+// --- RAW.json schema ---
+
+export type RemotePolicy = 'remote' | 'hybrid' | 'onsite' | 'unknown';
+
+export type ContractType =
+  | 'CDI'
+  | 'CDD'
+  | 'Freelance'
+  | 'Portage'
+  | 'Stage'
+  | 'Alternance'
+  | 'Unknown';
+
+/** On-disk RAW.json — one per offer folder. */
+export interface RawOffer {
+  source_site: string;
+  search_profile: string;
+  offer_url: string;
+  apply_url: string;
+  collected_at: string; // ISO 8601 with timezone
+  fingerprint: string; // SHA-256 truncated to 16 hex
   title: string;
-  description?: string;
-  buyer?: string;
-  location?: string;
-  tjmMin?: number;
-  tjmMax?: number;
-  skills?: string[];
-  offerType: 'freelance' | 'cdi' | 'appel-offre';
-  url: string;
-  deadline?: string; // ISO 8601
-  datePublished?: string; // ISO 8601
-  rawData?: Record<string, unknown>;
+  company: string | null;
+  requester: string | null;
+  intermediary: string | null;
+  location: string | null;
+  remote_policy: RemotePolicy;
+  contract_type: ContractType;
+  salary_min: number | null;
+  salary_max: number | null;
+  daily_rate: number | null;
+  currency: string;
+  team_size: number | null;
+  experience_years: number | null;
+  skills_required: string[];
+  skills_optional: string[];
+  description_raw: string;
 }
+
+// --- Registry ---
+
+/** One entry per processed offer in registry.json. */
+export interface RegistryEntry {
+  fingerprint: string;
+  offer_url: string;
+  folder: string; // Absolute path to offer directory
+  site: string;
+  search_profile: string;
+  collected_at: string;
+  tier1_score: number;
+}
+
+// --- Queue ---
+
+/** Scraper output file dropped into OFFRES/queue/. */
+export interface QueueEntry {
+  site: string;
+  profile: string;
+  collected_at: string;
+  total_found: number;
+  total_new: number;
+  total_duplicates: number;
+  urls: string[];
+}
+
+// --- Lifecycle ---
+
+export type OfferLifecycle = 'RECU' | 'APPLIED' | 'ARCHIVED';
+
+/** A fully resolved offer = RAW.json + filesystem metadata. */
+export interface ResolvedOffer {
+  raw: RawOffer;
+  folderPath: string;
+  status: OfferLifecycle;
+  site: string;
+  searchProfile: string;
+  tier1Score: number;
+}
+
+// --- Scraper interfaces ---
 
 export interface ScraperRunConfig {
   searchTerms: string[];
+  searchProfile: string;
   maxPages: number;
   requestDelay: number;
   timeout: number;
 }
 
 export interface Scraper {
-  platform: string;
+  site: string;
   name: string;
-  scrape(config: ScraperRunConfig): Promise<ScrapedOffer[]>;
+  scrape(config: ScraperRunConfig): Promise<RawOffer[]>;
   test(): Promise<{ ok: boolean; error?: string }>;
 }
-
-/** DB row for freelance_offers table. */
-export interface FreelanceOffer extends ScrapedOffer {
-  id: string; // platform + '_' + platformId
-  dateScraped: string;
-  relevanceScore: number;
-  relevanceScoreT2?: number;
-  status: OfferStatus;
-}
-
-export type OfferStatus =
-  | 'new'
-  | 'analyzed'
-  | 'applied'
-  | 'rejected'
-  | 'expired';

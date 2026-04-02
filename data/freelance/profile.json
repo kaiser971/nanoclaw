@@ -211,7 +211,7 @@
     "minMonths": 3,
     "maxMonths": 36
   },
-  "preferredOfferTypes": ["freelance", "appel-offre"],
+  "preferredOfferTypes": ["freelance", "cdi", "appel-offre"],
   "languages": [
     { "name": "Français", "level": "native" },
     { "name": "Anglais", "level": "professional", "certification": "TOEIC 800" }

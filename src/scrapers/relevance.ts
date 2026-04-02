@@ -12,7 +12,7 @@ import {
   ALL_SEARCH_TERMS,
   EXCLUDED_TITLE_PATTERNS,
 } from './config.js';
-import type { ScrapedOffer } from './types.js';
+import type { RawOffer } from './types.js';
 
 /** Domain keywords that indicate an offer is in-scope for the profile. */
 const DOMAIN_KEYWORDS = [
@@ -182,7 +182,7 @@ function scoreTitle(
 }
 
 function scoreLocationMatch(
-  location: string | undefined,
+  location: string | null,
   profile: Profile,
 ): number {
   if (!location) return 0.5; // no location → neutral
@@ -218,27 +218,22 @@ function scoreLocationMatch(
 }
 
 function scoreTjmMatch(
-  tjmMin: number | undefined,
-  tjmMax: number | undefined,
+  dailyRate: number | null,
   profile: Profile,
 ): number {
-  if (!tjmMin && !tjmMax) return 0.5; // no TJM → neutral
+  if (!dailyRate) return 0.5; // no TJM → neutral
 
-  const offerTjm = tjmMax || tjmMin || 0;
-
-  if (offerTjm >= profile.tjm.target) return 1.0;
-  if (offerTjm >= profile.tjm.minimum) return 0.7;
-  if (offerTjm >= profile.tjm.minimum * 0.8) return 0.3;
+  if (dailyRate >= profile.tjm.target) return 1.0;
+  if (dailyRate >= profile.tjm.minimum) return 0.7;
+  if (dailyRate >= profile.tjm.minimum * 0.8) return 0.3;
   return 0.0;
 }
 
-function scoreFreshness(datePublished: string | undefined): number {
-  if (!datePublished) return 0.5;
+function scoreFreshness(collectedAt: string): number {
+  const collected = new Date(collectedAt).getTime();
+  if (isNaN(collected)) return 0.5;
 
-  const published = new Date(datePublished).getTime();
-  if (isNaN(published)) return 0.5;
-
-  const ageInDays = (Date.now() - published) / (1000 * 60 * 60 * 24);
+  const ageInDays = (Date.now() - collected) / (1000 * 60 * 60 * 24);
 
   if (ageInDays <= 1) return 1.0;
   if (ageInDays <= 3) return 0.8;
@@ -248,8 +243,8 @@ function scoreFreshness(datePublished: string | undefined): number {
   return 0.1;
 }
 
-function scoreDomainRelevance(offer: ScrapedOffer): number {
-  const text = `${offer.title} ${offer.description || ''}`.toLowerCase();
+function scoreDomainRelevance(offer: RawOffer): number {
+  const text = `${offer.title} ${offer.description_raw}`.toLowerCase();
 
   let domainHits = 0;
   for (const keyword of DOMAIN_KEYWORDS) {
@@ -262,8 +257,8 @@ function scoreDomainRelevance(offer: ScrapedOffer): number {
   return 0.2; // no domain keyword match at all
 }
 
-function scoreExperienceMatch(offer: ScrapedOffer, profile: Profile): number {
-  const text = `${offer.title} ${offer.description || ''}`.toLowerCase();
+function scoreExperienceMatch(offer: RawOffer, profile: Profile): number {
+  const text = `${offer.title} ${offer.description_raw}`.toLowerCase();
 
   // Look for seniority indicators
   if (text.includes('junior') || text.includes('débutant')) return 0.3;
@@ -336,7 +331,7 @@ const IDF_REMOTE_KEYWORDS = [
  * IDF or remote keywords → hard-reject (not in scope).
  * If location is absent or empty, returns false (neutral → don't reject).
  */
-function isLocationExcluded(location: string | undefined): boolean {
+function isLocationExcluded(location: string | null): boolean {
   if (!location || location.trim() === '' || location === '—') return false;
 
   const loc = location.toLowerCase();
@@ -355,7 +350,7 @@ function isLocationExcluded(location: string | undefined): boolean {
  * Returns true → score 0, offer filtered out.
  */
 function isHardExcluded(
-  offer: ScrapedOffer,
+  offer: RawOffer,
   excludedSkills: Set<string>,
 ): boolean {
   const title = offer.title.toLowerCase();
@@ -394,7 +389,7 @@ export interface ScoringResult {
 }
 
 export function scoreOffer(
-  offer: ScrapedOffer,
+  offer: RawOffer,
   profile?: Profile,
 ): ScoringResult {
   const p = profile || loadProfile();
@@ -421,8 +416,10 @@ export function scoreOffer(
 
   const weights = SCORING_CONFIG.TIER1_WEIGHTS;
 
+  const allSkills = [...offer.skills_required, ...offer.skills_optional];
+
   const rawSkillMatch = scoreSkillMatch(
-    offer.skills || [],
+    allSkills,
     profileAliases,
     excludedSkills,
   );
@@ -434,8 +431,8 @@ export function scoreOffer(
     domainRelevance: domain,
     experienceMatch: scoreExperienceMatch(offer, p),
     locationMatch: scoreLocationMatch(offer.location, p),
-    tjmMatch: scoreTjmMatch(offer.tjmMin, offer.tjmMax, p),
-    freshnessBonus: scoreFreshness(offer.datePublished),
+    tjmMatch: scoreTjmMatch(offer.daily_rate, p),
+    freshnessBonus: scoreFreshness(offer.collected_at),
   };
 
   // For offers without explicit tech skills (e.g. BOAMP),
@@ -455,12 +452,12 @@ export function scoreOffer(
   };
 }
 
-/** Score all new offers in the DB and update their relevance_score. */
+/** Score a batch of offers and return them sorted by score descending. */
 export function scoreNewOffers(
-  offers: ScrapedOffer[],
-): Array<{ offer: ScrapedOffer; score: number }> {
+  offers: RawOffer[],
+): Array<{ offer: RawOffer; score: number }> {
   const profile = loadProfile();
-  const results: Array<{ offer: ScrapedOffer; score: number }> = [];
+  const results: Array<{ offer: RawOffer; score: number }> = [];
 
   for (const offer of offers) {
     const { score } = scoreOffer(offer, profile);
