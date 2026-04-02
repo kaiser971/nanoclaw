@@ -189,7 +189,12 @@ function cardToOffer(card: ParsedCard, searchProfile: string): RawOffer {
     offer_url: offerUrl,
     apply_url: offerUrl,
     collected_at: new Date().toISOString(),
-    fingerprint: computeFingerprint(card.title, null, card.location ?? null, 'Freelance'),
+    fingerprint: computeFingerprint(
+      card.title,
+      null,
+      card.location ?? null,
+      'Freelance',
+    ),
     title: card.title,
     company: null,
     requester: null,

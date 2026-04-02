@@ -667,9 +667,7 @@ async function main(): Promise<void> {
   }
 
   // Register Autoapply module (scraping, scoring, CV, PDF pipeline)
-  const { registerHostTask, getHostTask } = await import(
-    './task-scheduler.js'
-  );
+  const { registerHostTask, getHostTask } = await import('./task-scheduler.js');
   const autoapply = registerAutoapply({
     sendMessage: async (jid, text) => {
       const channel = findChannel(channels, jid);

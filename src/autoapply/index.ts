@@ -27,7 +27,11 @@ import {
   archiveExpiredOffers,
   purgeOldOffers,
 } from './offer-store.js';
-import { runAllScrapers, buildDigest, buildScoringPrompt } from './orchestrator.js';
+import {
+  runAllScrapers,
+  buildDigest,
+  buildScoringPrompt,
+} from './orchestrator.js';
 import type { ChildProcess } from 'child_process';
 
 // --- Public types ---
@@ -38,14 +42,23 @@ export interface AutoapplyDeps {
   /** Register a host-side task. */
   registerHostTask: (
     name: string,
-    fn: () => Promise<{ result: string; triggerContainer?: { prompt: string } }>,
+    fn: () => Promise<{
+      result: string;
+      triggerContainer?: { prompt: string };
+    }>,
   ) => void;
   /** Get a registered host task by name. */
   getHostTask: (
     name: string,
-  ) => (() => Promise<{ result: string; triggerContainer?: { prompt: string } }>) | undefined;
+  ) =>
+    | (() => Promise<{ result: string; triggerContainer?: { prompt: string } }>)
+    | undefined;
   /** Enqueue a task on the group queue. */
-  enqueueTask: (chatJid: string, taskId: string, fn: () => Promise<void>) => void;
+  enqueueTask: (
+    chatJid: string,
+    taskId: string,
+    fn: () => Promise<void>,
+  ) => void;
   /** Close stdin of an active container for a given chat. */
   closeStdin: (chatJid: string) => void;
   /** Run a container agent. */
@@ -86,7 +99,11 @@ export interface AutoapplyDeps {
 
 export interface AutoapplyApi {
   /** Enqueue the full autoapply pipeline (scoring → CV → PDF). */
-  enqueueContainerRun: (chatJid: string, prompt: string, groupFolder: string) => void;
+  enqueueContainerRun: (
+    chatJid: string,
+    prompt: string,
+    groupFolder: string,
+  ) => void;
   /** Handle run_host_task IPC messages. */
   handleRunHostTask: (
     data: { taskId?: string },
@@ -193,8 +210,7 @@ Utilise le skill resume-optimizer.`,
       if (!fs.existsSync(dir)) return results;
 
       for (const site of fs.readdirSync(dir)) {
-        if (['queue', '.git'].includes(site) || site.startsWith('.'))
-          continue;
+        if (['queue', '.git'].includes(site) || site.startsWith('.')) continue;
         const siteDir = `${dir}/${site}`;
         if (!fs.statSync(siteDir).isDirectory()) continue;
 
@@ -272,8 +288,7 @@ Utilise le skill resume-optimizer.`,
     }
 
     const parts: string[] = [];
-    if (alreadyHavePdf > 0)
-      parts.push(`${alreadyHavePdf} PDFs déjà présents`);
+    if (alreadyHavePdf > 0) parts.push(`${alreadyHavePdf} PDFs déjà présents`);
     if (generated.length > 0)
       parts.push(`${generated.length} PDFs convertis (fallback)`);
     if (failed.length > 0) parts.push(`${failed.length} échecs`);
@@ -451,82 +466,76 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
       await deps.sendMessage(chatJid, text);
     };
 
-    deps.enqueueTask(
-      chatJid,
-      `autoapply-pipeline-${Date.now()}`,
-      async () => {
-        // --- Phase 2a: Scoring Tier 2 ---
-        logger.info('[AUTOAPPLY] Phase 2a: Scoring');
-        await runContainer(prompt);
+    deps.enqueueTask(chatJid, `autoapply-pipeline-${Date.now()}`, async () => {
+      // --- Phase 2a: Scoring Tier 2 ---
+      logger.info('[AUTOAPPLY] Phase 2a: Scoring');
+      await runContainer(prompt);
 
-        // --- Post-scoring: host processes results ---
-        logger.info('[AUTOAPPLY] Processing scoring results (host-side)');
-        const bilan = processScoringResults();
+      // --- Post-scoring: host processes results ---
+      logger.info('[AUTOAPPLY] Processing scoring results (host-side)');
+      const bilan = processScoringResults();
 
-        const totalToGenerate = getScoredWithoutCV().length;
+      const totalToGenerate = getScoredWithoutCV().length;
 
-        await sendMsg(
-          `📊 *Bilan scoring Tier 2*\n\n` +
-            `• ${bilan.apply} offres "apply"\n` +
-            `• ${bilan.maybe} offres "maybe"\n` +
-            `• ${bilan.skip} archivées (skip) avec cause.md\n` +
-            `• ${bilan.unscored} non scorées (SCORING.json manquant)\n` +
-            `• ${totalToGenerate} CV à générer` +
-            (bilan.errors.length > 0
-              ? `\n• ${bilan.errors.length} erreurs`
-              : ''),
+      await sendMsg(
+        `📊 *Bilan scoring Tier 2*\n\n` +
+          `• ${bilan.apply} offres "apply"\n` +
+          `• ${bilan.maybe} offres "maybe"\n` +
+          `• ${bilan.skip} archivées (skip) avec cause.md\n` +
+          `• ${bilan.unscored} non scorées (SCORING.json manquant)\n` +
+          `• ${totalToGenerate} CV à générer` +
+          (bilan.errors.length > 0 ? `\n• ${bilan.errors.length} erreurs` : ''),
+      );
+
+      if (totalToGenerate === 0) {
+        logger.info(
+          '[AUTOAPPLY] No offers to generate CV for, stopping pipeline',
+        );
+        await sendMsg(`✅ *Pipeline terminé* — aucun CV à générer.`);
+        return;
+      }
+
+      // --- Phase 2b: CV generation ---
+      const cvTask = deps.getHostTask('autoapply_cv_generation');
+      if (cvTask) {
+        const cvResult = await cvTask();
+        logger.info(
+          { result: cvResult.result },
+          '[AUTOAPPLY] CV generation check',
         );
 
-        if (totalToGenerate === 0) {
-          logger.info(
-            '[AUTOAPPLY] No offers to generate CV for, stopping pipeline',
+        if (cvResult.triggerContainer) {
+          await sendMsg(
+            `✏️ *Génération CV* : ${totalToGenerate} CV à adapter...`,
           );
-          await sendMsg(`✅ *Pipeline terminé* — aucun CV à générer.`);
-          return;
+          logger.info('[AUTOAPPLY] Phase 2b: CV generation');
+          await runContainer(cvResult.triggerContainer.prompt);
+          await sendMsg(`✅ Génération CV terminée.`);
         }
+      }
 
-        // --- Phase 2b: CV generation ---
-        const cvTask = deps.getHostTask('autoapply_cv_generation');
-        if (cvTask) {
-          const cvResult = await cvTask();
-          logger.info(
-            { result: cvResult.result },
-            '[AUTOAPPLY] CV generation check',
-          );
-
-          if (cvResult.triggerContainer) {
-            await sendMsg(
-              `✏️ *Génération CV* : ${totalToGenerate} CV à adapter...`,
-            );
-            logger.info('[AUTOAPPLY] Phase 2b: CV generation');
-            await runContainer(cvResult.triggerContainer.prompt);
-            await sendMsg(`✅ Génération CV terminée.`);
-          }
-        }
-
-        // --- Phase 3: PDF generation ---
-        const pdfTask = deps.getHostTask('autoapply_generate_pdfs');
-        if (pdfTask) {
-          logger.info('[AUTOAPPLY] Phase 3: PDF generation');
-          const pdfResult = await pdfTask();
-          logger.info(
-            { result: pdfResult.result },
-            '[AUTOAPPLY] PDF generation completed',
-          );
-          await sendMsg(`📄 ${pdfResult.result}`);
-        }
-
-        // --- Final summary ---
-        const stats = getOfferStats();
-        await sendMsg(
-          `✅ *Pipeline terminé*\n\n` +
-            `• ${stats.recu} offres en attente\n` +
-            `• ${stats.applied} candidatures\n` +
-            `• ${stats.archived} archivées\n` +
-            `• ${stats.total} total`,
+      // --- Phase 3: PDF generation ---
+      const pdfTask = deps.getHostTask('autoapply_generate_pdfs');
+      if (pdfTask) {
+        logger.info('[AUTOAPPLY] Phase 3: PDF generation');
+        const pdfResult = await pdfTask();
+        logger.info(
+          { result: pdfResult.result },
+          '[AUTOAPPLY] PDF generation completed',
         );
-      },
-    );
+        await sendMsg(`📄 ${pdfResult.result}`);
+      }
+
+      // --- Final summary ---
+      const stats = getOfferStats();
+      await sendMsg(
+        `✅ *Pipeline terminé*\n\n` +
+          `• ${stats.recu} offres en attente\n` +
+          `• ${stats.applied} candidatures\n` +
+          `• ${stats.archived} archivées\n` +
+          `• ${stats.total} total`,
+      );
+    });
     logger.info(
       { chatJid, groupFolder },
       'Autoapply pipeline enqueued (scoring → CV → PDF)',
@@ -641,10 +650,7 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      logger.error(
-        { taskId: data.taskId, error },
-        'Host task failed via IPC',
-      );
+      logger.error({ taskId: data.taskId, error }, 'Host task failed via IPC');
     }
   }
 
