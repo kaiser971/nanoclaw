@@ -75,6 +75,7 @@ export interface AutoapplyDeps {
     },
     onProcess: (proc: ChildProcess, containerName: string) => void,
     onOutput?: (output: ContainerOutput) => Promise<void>,
+    containerImage?: string,
   ) => Promise<ContainerOutput>;
   /** Look up registered groups. */
   registeredGroups: () => Record<string, RegisteredGroup>;
@@ -173,14 +174,15 @@ INSTRUCTIONS :
 1. Pour CHAQUE offre ci-dessous :
    a. Lis RAW.json et SCORING.json
    b. Copie le CV source puis adapte-le avec python-docx (skill resume-optimizer)
-   c. Si libreoffice est disponible, génère aussi le PDF : libreoffice --headless --convert-to pdf --outdir {offer_dir} {offer_dir}/CV_*.docx
-   d. Envoie un message de progression via mcp__nanoclaw__send_message : "✏️ CV {i}/${needCV.length} : [titre] — CV généré [+ PDF]"
+   c. Envoie un message de progression via mcp__nanoclaw__send_message : "✏️ CV {i}/${needCV.length} : [titre] — CV DOCX généré"
 2. APRÈS avoir généré TOUS les CV :
    cd /workspace/extra/freelance-radar && git add -A && git commit -m "feat: CV générés — $(date +%Y-%m-%d)" || true
 3. Envoie un message récapitulatif final via mcp__nanoclaw__send_message indiquant :
    - Nombre de CV DOCX générés
-   - Nombre de PDF générés
    - Liste des offres traitées avec le nom de l'entreprise
+
+IMPORTANT : Génère UNIQUEMENT les fichiers CV .docx. NE PAS générer de PDF.
+La conversion PDF est gérée par le host dans une phase séparée.
 
 Profil : /workspace/project/data/freelance/profile.json
 CV source : /workspace/project/data/freelance/CV.docx
@@ -433,7 +435,10 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
     }
     const isMain = group.isMain === true;
 
-    const runContainer = async (containerPrompt: string): Promise<void> => {
+    const runContainer = async (
+      containerPrompt: string,
+      image?: string,
+    ): Promise<void> => {
       const output = await deps.runContainerAgent(
         group,
         {
@@ -456,6 +461,7 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
             deps.closeStdin(chatJid);
           }
         },
+        image,
       );
       if (output.newSessionId) {
         deps.setSession(groupFolder, output.newSessionId);
@@ -467,9 +473,9 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
     };
 
     deps.enqueueTask(chatJid, `autoapply-pipeline-${Date.now()}`, async () => {
-      // --- Phase 2a: Scoring Tier 2 ---
+      // --- Phase 2a: Scoring Tier 2 (uses scorer image — no python-docx) ---
       logger.info('[AUTOAPPLY] Phase 2a: Scoring');
-      await runContainer(prompt);
+      await runContainer(prompt, 'nanoclaw-scorer:latest');
 
       // --- Post-scoring: host processes results ---
       logger.info('[AUTOAPPLY] Processing scoring results (host-side)');
@@ -489,9 +495,25 @@ Après avoir tout traité, envoie via mcp__nanoclaw__send_message :
 
       if (totalToGenerate === 0) {
         logger.info(
-          '[AUTOAPPLY] No offers to generate CV for, stopping pipeline',
+          '[AUTOAPPLY] No offers to generate CV for, skipping CV phase',
         );
-        await sendMsg(`✅ *Pipeline terminé* — aucun CV à générer.`);
+        await sendMsg(`✅ Aucun CV à générer.`);
+
+        // Still run PDF check to inform user of current state
+        const pdfTask = deps.getHostTask('autoapply_generate_pdfs');
+        if (pdfTask) {
+          const pdfResult = await pdfTask();
+          await sendMsg(`📄 ${pdfResult.result}`);
+        }
+
+        const stats = getOfferStats();
+        await sendMsg(
+          `✅ *Pipeline terminé*\n\n` +
+            `• ${stats.recu} offres en attente\n` +
+            `• ${stats.applied} candidatures\n` +
+            `• ${stats.archived} archivées\n` +
+            `• ${stats.total} total`,
+        );
         return;
       }
 

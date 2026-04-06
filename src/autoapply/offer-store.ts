@@ -275,6 +275,11 @@ export function moveOffer(
 
   const newFolderPath = path.join(profileDir, newStatus, folderName);
   fs.mkdirSync(path.dirname(newFolderPath), { recursive: true });
+
+  if (fs.existsSync(newFolderPath)) {
+    // Target already exists (duplicate from previous run) — remove the old copy and replace
+    fs.rmSync(newFolderPath, { recursive: true, force: true });
+  }
   fs.renameSync(currentFolderPath, newFolderPath);
 
   // Update registry

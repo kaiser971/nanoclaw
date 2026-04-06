@@ -236,6 +236,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  containerImage?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -278,7 +279,7 @@ async function buildContainerArgs(
     }
   }
 
-  args.push(CONTAINER_IMAGE);
+  args.push(containerImage || CONTAINER_IMAGE);
 
   return args;
 }
@@ -288,6 +289,7 @@ export async function runContainerAgent(
   input: ContainerInput,
   onProcess: (proc: ChildProcess, containerName: string) => void,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  containerImage?: string,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
 
@@ -305,6 +307,7 @@ export async function runContainerAgent(
     mounts,
     containerName,
     agentIdentifier,
+    containerImage,
   );
 
   logger.debug(

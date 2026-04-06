@@ -326,6 +326,8 @@ export function writeOffersToIpc(
 export function buildScoringPrompt(count: number): string {
   return `${count} offres en attente de scoring Tier 2.
 
+⚠️ CETTE TÂCHE EST EXCLUSIVEMENT DU SCORING. Tu ne dois RIEN faire d'autre que scorer.
+
 INSTRUCTIONS — SCORING UNIQUEMENT :
 1. Trouve les offres à scorer (celles dans RECU/ sans SCORING.json) :
    find /workspace/extra/freelance-radar/OFFRES -path "*/RECU/*/RAW.json" | while read f; do d=$(dirname "$f"); [ ! -f "$d/SCORING.json" ] && echo "$d"; done | sort
@@ -342,11 +344,14 @@ INSTRUCTIONS — SCORING UNIQUEMENT :
    - recommendation : "apply" (>= 0.7), "maybe" (0.5–0.7), "skip" (< 0.5)
    - reasoning : OBLIGATOIRE, doit expliquer précisément les raisons du score
 
-RÈGLES STRICTES :
-- NE PAS déplacer de dossiers. NE PAS supprimer de dossiers. Le host s'en charge.
-- NE PAS générer de CV. NE PAS appeler le skill resume-optimizer.
+INTERDICTIONS ABSOLUES (le pipeline est compartimenté, chaque phase a sa tâche) :
+- NE PAS générer de CV (ni .docx ni .pdf). La génération CV est une phase séparée gérée par le host.
+- NE PAS appeler le skill resume-optimizer. Il sera appelé dans la phase suivante.
+- NE PAS utiliser python-docx, libreoffice, ou tout outil de génération de documents.
+- NE PAS copier ni modifier de fichier CV. Ne touche à AUCUN fichier CV_*.
+- NE PAS déplacer ni supprimer de dossiers. Le host s'en charge après le scoring.
+- Le SEUL fichier que tu dois créer est SCORING.json dans chaque dossier d'offre.
 - ÉCRIRE un SCORING.json pour CHAQUE offre sans exception.
-- Le champ "reasoning" doit être rempli pour TOUTES les offres (apply, maybe ET skip).
 
 Profil : /workspace/project/data/freelance/profile.json
 Repo offres : /workspace/extra/freelance-radar/OFFRES/`;
